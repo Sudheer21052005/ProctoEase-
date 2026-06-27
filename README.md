@@ -1,142 +1,176 @@
-# ProctoEase - AI-Powered Online Examination Platform
+# 🛡️ ProctoEase - AI-Powered Multi-Tenant Online Examination & Proctoring Platform
 
-ProctoEase is a full-stack, multi-tenant online assessment system built for secure technical evaluations. It supports mixed exams (MCQ + coding), live proctoring, plagiarism analysis, and recruiter analytics in a production-ready Dockerized setup.
+ProctoEase is a production-grade, multi-tenant SaaS online assessment platform designed to conduct secure academic and recruitment evaluations. It integrates mixed-format exams (MCQs + coding challenges), sandboxed code execution, real-time proctoring telemetry over WebSockets, AST-based plagiarism checking, and composite risk scoring into a single unified workspace.
 
-## Final Status
-
-- QA-critical defects are remediated and verified.
-- Plagiarism API serialization issue (MissingGreenlet) is fixed for both trigger and report retrieval flows.
-- Candidate preflight gating (camera/mic/fullscreen + identity photo) is intentional and active.
-- Platform is demo-ready for mentor review and academic viva.
+> [!NOTE]
+> This project is currently in active development. Features, database schemas, and AI models will continue to evolve.
 
 ---
 
-## Tech Stack
+## 🚀 Key Features
 
-## Frontend
+### 🏢 Multi-Tenant SaaS Isolation
+- **Strict Tenant Context**: Express middleware extracts organization scopes via path slugs or headers to prevent cross-tenant data leakage.
+- **Role-Based Access Control (RBAC)**: Distinct workspace dashboards for **Admins**, **Recruiters**, and **Candidates**.
 
-- Vite
-- React 19 + TypeScript
-- Zustand
-- TanStack React Query
-- Tailwind CSS v4
+### 📝 Hybrid Exam Engine
+- **Mixed Questions**: Supports MCQs, multi-select questions, and full programming challenges in a single unified exam window.
+- **Flexible Ingestion**: Ingest exam content manually, via JSON payloads, or by parsing PDF structures.
+- **Auto-Grading**: Automatic MCQ grading instantly triggers upon candidate exam submission.
 
-## Backend
+### 👁️‍🗨️ Real-Time Proctoring & Client Security
+- **Telemetry Pipe**: Asynchronous WebSocket connection persists exam session telemetry directly from the candidate browser.
+- **Client-Side Integrity Guards**:
+  - Enforced fullscreen mode with re-entry prompts.
+  - Tab switch and focus loss detection.
+  - Right-click, context menu, and copy/paste blocking.
+  - Developer tools heuristic detection.
+  - Inactivity monitoring.
+- **Webcam Monitoring**: Captures periodic snapshots and detects face anomalies (no-face, multiple-faces, transition anomalies).
 
-- FastAPI (async)
-- SQLAlchemy 2 (async) + asyncpg
-- PostgreSQL
-- Redis
-- Alembic
+### 💻 Sandboxed Code Execution
+- **Judge0 CE Integration**: Offloads untrusted candidate code execution to an isolated worker sandbox.
+- **Resource Constraints**: Strict limits configured on execution memory (128 MB), CPU time, and thread count.
+- **Detailed Metrics**: Captures compile logs, stdout, stderr, run time, and memory footprint.
 
-## Assessment Engines
+### 🔍 Plagiarism & Code Analysis
+- **Token-Based Comparisons**: Tokenizes programming submissions (Python AST parsing + generic fallback tokenizer) to compare token-structure similarity.
+- **Flagging Rules**: Generatespairwise plagiarism reports listing matching tokens, similarity scores, and flagged candidate pairs.
 
-- Judge0 sandbox for coding execution
-- Proctoring event pipeline over WebSocket
-- Plagiarism analysis with token-structure similarity
-- Risk scoring from proctoring violation events
+### 📈 composite Risk Scoring Engine
+- **Algorithmic Weighting**: Evaluates different proctoring violation types with custom risk weights.
+- **Diminishing Returns**: Prevents scoring over-amplification on repeated minor events (e.g. continuous fast tab switches).
+- **Categorization**: Normalizes final attempts to a `[0, 1]` risk score and groups candidates into **Low**, **Medium**, **High**, or **Critical** risk categories.
 
 ---
 
-## Repository Layout
+## 📐 System Architecture
 
-- [ProctoEase/](ProctoEase/): core backend + docker compose + migrations + frontend app
-- [FEATURES.md](Files/FEATURES.md): complete role/module feature matrix
-- [ARCHITECTURE.md](Files/ARCHITECTURE.md): system design and component behavior
-- [VIVA_PREPARATION.md](Files/VIVA_PREPARATION.md): ready-to-use viva Q&A and presentation flow
+```
+                    ┌────────────────────────┐
+                    │  React SPA Front-End   │
+                    │   (Tailwind v4, Vite)  │
+                    └───────────┬────────────┘
+                                │
+                 HTTP REST      │    WebSocket Telemetry
+             ┌──────────────────┼─────────────────┐
+             ▼                  │                 ▼
+┌────────────────────────┐      │       ┌────────────────────────┐
+│      FastAPI App       │◄─────┘       │  WebSocket Connection   │
+│   (Uvicorn, Asyncio)   │              │     (Proctoring)       │
+└────────────┬───────────┘              └───────────┬────────────┘
+             │                                      │
+     ┌───────┴───────┬──────────────┐               │
+     ▼               ▼              ▼               ▼
+┌──────────┐   ┌──────────┐   ┌───────────┐   ┌───────────┐
+│ PostgreSQL│  │  Redis   │   │  Judge0   │   │  Storage  │
+│  (Data)  │   │ (Limits) │   │ (Sandbox) │   │(Snapshots)│
+└──────────┘   └──────────┘   └───────────┘   └───────────┘
+```
 
 ---
 
-## Run Full Stack with Docker (Recommended)
+## 🛠️ Technology Stack
 
-## 1) Prerequisites
+### Front-End
+- **Framework**: React 19 SPA (TypeScript)
+- **Styling**: Tailwind CSS v4
+- **State**: Zustand (Session & Client Proctoring stores)
+- **Data Fetching**: TanStack React Query (Server-backed query caching)
+- **Interactions**: Framer Motion
+- **Libraries**: Monaco Editor (for coding challenges), TensorFlow.js & MediaPipe (ready for advanced client-side camera inference)
 
-- Docker Desktop installed and running
-- Docker Compose v2 available
+### Back-End
+- **Framework**: FastAPI (Fully Asynchronous)
+- **Asynchronous ORM**: SQLAlchemy 2.0 (Asyncpg driver)
+- **Database**: PostgreSQL 16 (Relational persistence)
+- **Fast Middleware Store**: Redis 7 (Rate limiting limits & Judge0 queue backplane)
+- **Migrations**: Alembic
+- **API Protection**: Slowapi (Redis-backed token-bucket rate limiter)
+- **Observability**: Prometheus metrics instrumentor
 
-## 2) Start services
+---
 
-From the ProctoEase directory:
+## 📦 Getting Started
 
-```powershell
+### 1) Prerequisites
+- **Docker Desktop** installed and active.
+- **Docker Compose v2** support.
+- **Node.js 18+** (for local frontend development).
+
+### 2) Environment Setup
+Create a `.env` file in the `ProctoEase` directory using the provided `.env.example` as a template:
+
+```bash
 cd ProctoEase
+cp .env.example .env
+```
+
+Ensure DB connection strings, Judge0 credentials, and security secret keys are defined.
+
+### 3) Spin Up Backend Services (Docker Compose)
+Build and launch all services (App, PostgreSQL, Redis, Judge0 server & worker, Judge0 DB) in background mode:
+
+```bash
 docker compose up -d --build
 ```
 
-This starts:
+### 4) Verify Service Health
+Check the application's liveness and readiness endpoints:
 
-- app (FastAPI backend)
-- db (PostgreSQL)
-- redis
-- judge0-server
-- judge0-worker
-- judge0-db
-
-## 3) Verify health
-
-```powershell
+```bash
+# Verify API is running
 curl http://localhost:8000/health
+
+# Verify DB, Redis, and Judge0 connectivity
 curl http://localhost:8000/health/ready
 ```
 
-## 4) Access points
+Access the OpenAPI documentation at: `http://localhost:8000/docs`
 
-- API docs: http://localhost:8000/docs
-- Backend base URL: http://localhost:8000
-- Frontend (dev mode): run separately from ProctoEase/frontend
+### 5) Spin Up Frontend
+Navigate to the frontend directory, install npm packages, and launch the Vite development server:
 
-## 5) Stop services
-
-```powershell
-docker compose down
+```bash
+cd frontend
+npm install
+npm run dev
 ```
 
-To remove volumes too:
-
-```powershell
-docker compose down -v
-```
+The app will start on: `http://localhost:5173`
 
 ---
 
-## Demo Credentials
+## 🔑 Demo Credentials
 
-Located in [ProctoEase/demo_credentials.txt](ProctoEase/demo_credentials.txt).
+All test accounts default to the password: `DemoPass@123`.
 
-Primary recruiter account:
+| Persona | Organization | Email Address |
+| :--- | :--- | :--- |
+| **Admin** | `techcorp` | `seed-admin.techcorp@demo.com` |
+| **Recruiter** | `techcorp` | `aarav.mehta@techcorp.com` |
+| **Candidate** | `techcorp` | `ishaan.sharma.10@techcorp.demo` |
 
-- Email: aarav.mehta@techcorp.com
-- Password: DemoPass@123
-- Tenant slug: techcorp
-
----
-
-## Core Workflow Snapshot
-
-1. Recruiter logs in and creates/publishes exam (manual/JSON/PDF ingestion).
-2. Candidate passes preflight checks and starts attempt with verification image.
-3. Candidate answers MCQs and submits coding solutions (Judge0 execution).
-4. Live proctoring events are captured and persisted.
-5. Recruiter computes risk, triggers plagiarism analysis, and reviews analytics/exports.
+### Suggested 3-Minute Evaluation Flow:
+1. **Login as Recruiter** (`aarav.mehta@techcorp.com`) → View current exams, preview questions, or inspect attempt metrics.
+2. **Logout & Login as Candidate** (`ishaan.sharma.10@techcorp.demo`) → Select an active exam, complete preflight webcam/audio checks, begin the exam, trigger violations (e.g. exit fullscreen, switch tabs), and submit answers.
+3. **Login back as Recruiter** → Inspect candidate proctoring logs, compute attempt risk ratings, view execution stats for programming questions, and execute a plagiarism check.
 
 ---
 
-## Key API Modules
+## 🗺️ Development Roadmap
 
-- /api/v1/auth
-- /api/v1/exams
-- /api/v1/attempts
-- /api/v1/questions
-- /api/v1/code
-- /api/v1/proctoring
-- /api/v1/plagiarism
-- /api/v1/risk
-- /api/v1/reporting
+ProctoEase is evolving to include the following core enhancements:
+- [ ] **Advanced Webcam Inference**: Integrate client-side TensorFlow.js object-detection models (detecting mobile phones, books, or extra faces) directly in the camera viewport.
+- [ ] **Offline Attempt Resilience**: LocalStorage buffering of answer states to support candidate recovery on transient offline environments.
+- [ ] **Dynamic Webhook Ingestors**: Support for pushing exam scores and risk status directly to LMS integrations (e.g., Canvas, Moodle).
+- [ ] **Analytical Charting**: Rich canvas/graph visualizer for question-level difficulty ratios and candidate performance curves.
 
 ---
 
-## Notes for Evaluation
+## 📂 Repository Structures & Docs
 
-- Architecture intentionally supports mixed question-format exams (not hard-separated by exam type).
-- Security model includes tenant scoping, RBAC, ownership checks, and route-level throttling.
-- Operational readiness includes health checks, metrics endpoint, and containerized reproducibility.
+Detailed design files are kept in the [Files/](Files/) directory:
+- [ARCHITECTURE.md](Files/ARCHITECTURE.md) - Deep dive into component interaction, isolation model, and data schemas.
+- [FEATURES.md](Files/FEATURES.md) - Full capability and RBAC authorization coverage matrices.
+- [VIVA_PREPARATION.md](Files/VIVA_PREPARATION.md) - Comprehensive preparation script and Q&A references for academic reviews.
