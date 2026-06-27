@@ -1,0 +1,36 @@
+{
+  "title": "Sample Frontend Assessment",
+  "description": "Test payload for exam creation via JSON ingestion.",
+  "duration_minutes": 60,
+  "is_published": false,
+  "questions": [
+    {
+      "type": "mcq",
+      "question": "Which hook is used for local state in React?",
+      "options": ["useEffect", "useState", "useMemo", "useRef"],
+      "correct_answer": "B",
+      "points": 2
+    },
+    {
+      "type": "true_false",
+      "question": "TypeScript is a superset of JavaScript.",
+      "correct_answer": true,
+      "points": 1
+    },
+    {
+      "type": "code",
+      "question": "Write a function that returns the sum of two integers.",
+      "points": 5,
+      "test_cases": [
+        {
+          "input": "1 2",
+          "expected": "3"
+        },
+        {
+          "input": "10 -4",
+          "expected": "6"
+        }
+      ]
+    }
+  ]
+}

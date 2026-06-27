@@ -1,0 +1,63 @@
+{
+  "title": "Python Algorithms & Data Science",
+  "description": "An intermediate assessment covering Python fundamentals, algorithmic problem solving, and standard input/output handling.",
+  "duration_minutes": 45,
+  "is_published": false,
+  "questions": [
+    {
+      "type": "mcq",
+      "question": "What is the worst-case time complexity of the QuickSort algorithm?",
+      "options": [
+        "O(n log n)",
+        "O(n)",
+        "O(n^2)",
+        "O(log n)"
+      ],
+      "correct_answer": "C",
+      "points": 2
+    },
+    {
+      "type": "multi_select",
+      "question": "Which of the following data structures are built-in and mutable in Python?",
+      "options": [
+        "List",
+        "Tuple",
+        "Dictionary",
+        "String"
+      ],
+      "correct_answer": "A, C",
+      "points": 4
+    },
+    {
+      "type": "mcq",
+      "question": "Which module in Python is used for regular expressions?",
+      "options": [
+        "regex",
+        "re",
+        "string",
+        "match"
+      ],
+      "correct_answer": "B",
+      "points": 2
+    },
+    {
+      "type": "code",
+      "question": "Write a program that reads an integer N from standard input, followed by N space-separated integers on the next line. Print the maximum difference between any two adjacent elements in the array. For example, for array [1, 5, 3], the differences are |1-5|=4 and |5-3|=2, so the max is 4.",
+      "points": 15,
+      "test_cases": [
+        {
+          "input": "3\n1 5 3",
+          "expected": "4"
+        },
+        {
+          "input": "5\n10 10 10 10 10",
+          "expected": "0"
+        },
+        {
+          "input": "4\n-5 2 8 -1",
+          "expected": "9"
+        }
+      ]
+    }
+  ]
+}

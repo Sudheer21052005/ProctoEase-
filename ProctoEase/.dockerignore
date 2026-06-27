@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+.env.*
+.git/
+.gitignore
+.vscode/
+.idea/
+frontend/
+*.pptx
+*.ppt
+create_ppt*.py
+*.md
+alembic/versions/__pycache__/

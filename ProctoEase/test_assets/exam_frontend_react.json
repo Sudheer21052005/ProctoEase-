@@ -1,0 +1,63 @@
+{
+  "title": "Frontend Engineering (React & JS)",
+  "description": "A technical assessment for frontend developers focusing on React hooks, JavaScript fundamentals, and algorithmic string manipulation.",
+  "duration_minutes": 60,
+  "is_published": false,
+  "questions": [
+    {
+      "type": "mcq",
+      "question": "Which React hook should be used to memoize a computationally expensive function's return value?",
+      "options": [
+        "useEffect",
+        "useCallback",
+        "useMemo",
+        "useRef"
+      ],
+      "correct_answer": "C",
+      "points": 2
+    },
+    {
+      "type": "multi_select",
+      "question": "Which of the following are valid ways to handle asynchronous operations in modern JavaScript?",
+      "options": [
+        "Promises",
+        "Callbacks",
+        "async/await",
+        "Generators"
+      ],
+      "correct_answer": "A, B, C",
+      "points": 4
+    },
+    {
+      "type": "mcq",
+      "question": "What is the output of `typeof null` in JavaScript?",
+      "options": [
+        "\"null\"",
+        "\"undefined\"",
+        "\"object\"",
+        "\"number\""
+      ],
+      "correct_answer": "C",
+      "points": 2
+    },
+    {
+      "type": "code",
+      "question": "Write a program that reads a single string from standard input. Print 'true' if the string is a valid palindrome (reads the same forwards and backwards, case-sensitive), and 'false' otherwise.",
+      "points": 10,
+      "test_cases": [
+        {
+          "input": "racecar",
+          "expected": "true"
+        },
+        {
+          "input": "hello",
+          "expected": "false"
+        },
+        {
+          "input": "Aba",
+          "expected": "false"
+        }
+      ]
+    }
+  ]
+}

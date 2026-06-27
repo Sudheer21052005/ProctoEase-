@@ -1,0 +1,69 @@
+{
+  "title": "Backend Systems & Databases",
+  "description": "Assessment covering database indexing, RESTful API design, and backend logic implementation.",
+  "duration_minutes": 50,
+  "is_published": false,
+  "questions": [
+    {
+      "type": "mcq",
+      "question": "In a relational database, what is the primary purpose of an index?",
+      "options": [
+        "To enforce referential integrity between tables",
+        "To speed up data retrieval operations",
+        "To compress the size of the database on disk",
+        "To automatically encrypt sensitive columns"
+      ],
+      "correct_answer": "B",
+      "points": 2
+    },
+    {
+      "type": "multi_select",
+      "question": "Which of the following HTTP methods are generally considered idempotent in RESTful APIs?",
+      "options": [
+        "GET",
+        "POST",
+        "PUT",
+        "DELETE"
+      ],
+      "correct_answer": "A, C, D",
+      "points": 4
+    },
+    {
+      "type": "mcq",
+      "question": "Which HTTP status code should a server return to indicate that the requested resource was successfully created?",
+      "options": [
+        "200 OK",
+        "201 Created",
+        "204 No Content",
+        "400 Bad Request"
+      ],
+      "correct_answer": "B",
+      "points": 2
+    },
+    {
+      "type": "code",
+      "question": "Write a program that reads a string representing an IPv4 address from standard input. Print 'Valid' if it is a properly formatted IPv4 address (four integers between 0 and 255 separated by dots, without leading zeros), and 'Invalid' otherwise.",
+      "points": 12,
+      "test_cases": [
+        {
+          "input": "192.168.1.1",
+          "expected": "Valid"
+        },
+        {
+          "input": "256.0.0.1",
+          "expected": "Invalid"
+        },
+        {
+          "input": "192.168.01.1",
+          "expected": "Invalid"
+        }
+      ]
+    }
+  ]
+}
+
+
+
+
+
+

@@ -1,0 +1,66 @@
+# Python cache and environments
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Node / Frontend local files
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Environment files and Secrets
+.env
+*.env
+.env.*
+*credentials.txt
+!ProctoEase/demo_credentials.txt
+!.env.example
+!*.env.example
+!.env.*.example
+
+# Local databases
+db.sqlite3
+*.db
+*.sqlite
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# JetBrains, VS Code, and other editors
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# AI Assistant & tool metadata/cache
+.gemini/
+.claude/
+.agents/
+.gsd/
+.kilocode/
+.tmp_report/
+.tmp_srs/
+qa_report.json
+qa_security_report.json
+review_update.json
+tech_day.json
+tech_day_v2.json
+
+# Dynamic uploads (keeps folder structure for seeders but ignores actual runtime uploads)
+ProctoEase/uploads/*
+!ProctoEase/uploads/proctoring/
+ProctoEase/uploads/proctoring/*
+!ProctoEase/uploads/proctoring/seeder_samples/
