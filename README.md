@@ -167,10 +167,3 @@ ProctoEase is evolving to include the following core enhancements:
 - [ ] **Analytical Charting**: Rich canvas/graph visualizer for question-level difficulty ratios and candidate performance curves.
 
 ---
-
-## 📂 Repository Structures & Docs
-
-Detailed design files are kept in the [Files/](Files/) directory:
-- [ARCHITECTURE.md](Files/ARCHITECTURE.md) - Deep dive into component interaction, isolation model, and data schemas.
-- [FEATURES.md](Files/FEATURES.md) - Full capability and RBAC authorization coverage matrices.
-- [VIVA_PREPARATION.md](Files/VIVA_PREPARATION.md) - Comprehensive preparation script and Q&A references for academic reviews.
