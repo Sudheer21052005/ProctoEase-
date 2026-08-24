@@ -5,7 +5,7 @@ export interface Question {
   id: string
   question_number: number
   text: string
-  type: "mcq" | "multi_select" | "true_false" | "short_answer" | "code"
+  type: "mcq" | "multi_select" | "true_false" | "code"
   options?: { id: string; text: string }[]
   marks: number
 }

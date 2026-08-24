@@ -155,7 +155,7 @@ def _parse_exam_text(text: str) -> dict[str, Any]:
       Description: ...
       Duration: 60
       Q1:
-      Type: mcq|multi_select|true_false|short_answer|code
+      Type: mcq|multi_select|true_false|code
       Question: ...
       Options:
       A) ...
@@ -290,7 +290,7 @@ def _parse_question_block(lines: list[str]) -> tuple[dict[str, Any] | None, str 
             test_cases[-1]["expected"] = _sanitize(line.split(":", 1)[1].strip())
             continue
 
-    if q_type not in {"mcq", "multi_select", "true_false", "short_answer", "code"}:
+    if q_type not in {"mcq", "multi_select", "true_false", "code"}:
         return None, f"unsupported question type '{q_type}'"
 
     if len(question_text) < 3:
@@ -313,8 +313,6 @@ def _parse_question_block(lines: list[str]) -> tuple[dict[str, Any] | None, str 
         if correct_answer is None:
             return None, "true_false requires a correct answer"
         question["correct_answer"] = bool(correct_answer)
-    elif q_type == "short_answer":
-        question["correct_answer"] = correct_answer
     elif q_type == "code":
         if test_cases:
             missing_expected = [tc for tc in test_cases if not tc.get("expected")]

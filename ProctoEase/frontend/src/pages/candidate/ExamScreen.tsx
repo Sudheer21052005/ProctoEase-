@@ -249,7 +249,6 @@ export default function ExamScreen() {
 
     const weightedMinSeconds = answeredQuestions.reduce((acc, q) => {
       if (q.type === "code") return acc + 90
-      if (q.type === "short_answer") return acc + 30
       return acc + 12
     }, 0)
 

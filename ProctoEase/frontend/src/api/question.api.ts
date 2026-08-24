@@ -10,7 +10,7 @@ export interface BackendQuestion {
   id: string
   exam_id: string
   question_text: string
-  question_type: "mcq" | "multi_select" | "true_false" | "short_answer" | "code"
+  question_type: "mcq" | "multi_select" | "true_false" | "code"
   options: QuestionOption[] | null
   points: number
   order_index: number

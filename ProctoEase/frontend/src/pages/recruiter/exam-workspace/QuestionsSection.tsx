@@ -45,7 +45,7 @@ export default function QuestionsSection() {
         points: newQ.points,
         order_index: questions.length,
       }
-      if (newQ.question_type !== "short_answer" && newQ.question_type !== "code") {
+      if (newQ.question_type !== "code") {
         payload.options = newQ.options.filter((o) => o.text.trim())
         payload.correct_answer = newQ.correct_answer
       }
@@ -127,7 +127,6 @@ export default function QuestionsSection() {
               <option value="mcq">MCQ</option>
               <option value="multi_select">Multi Select</option>
               <option value="true_false">True/False</option>
-              <option value="short_answer">Short Answer</option>
               <option value="code">Code</option>
             </select>
             <input
@@ -142,7 +141,7 @@ export default function QuestionsSection() {
             />
           </div>
 
-          {newQ.question_type !== "short_answer" && newQ.question_type !== "code" && (
+          {newQ.question_type !== "code" && (
             <div className="space-y-2">
               {newQ.options.map((opt, i) => (
                 <div key={opt.label} className="flex items-center gap-2">

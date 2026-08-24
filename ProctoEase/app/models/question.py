@@ -1,5 +1,5 @@
 """
-Question model — exam content (MCQ, multi-select, true/false, short answer).
+Question model — exam content (MCQ, multi-select, true/false, code).
 Questions belong to an exam and are tenant-scoped.
 """
 
@@ -19,7 +19,6 @@ class QuestionType(str, enum.Enum):
     MCQ          = "mcq"
     MULTI_SELECT = "multi_select"
     TRUE_FALSE   = "true_false"
-    SHORT_ANSWER = "short_answer"
     CODE         = "code"
 
 
@@ -40,7 +39,7 @@ class Question(Base, TenantMixin, TimestampMixin):
     )
     # MCQ/MULTI_SELECT: [{"label": "A", "text": "Option 1"}, ...]
     options: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-    # MCQ: "A", MULTI_SELECT: ["A","B"], TRUE_FALSE: true/false, SHORT: "answer text"
+    # MCQ: "A", MULTI_SELECT: ["A","B"], TRUE_FALSE: true/false, CODE: {"test_cases": [...]}
     correct_answer: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     points: Mapped[int] = mapped_column(Integer, default=1)

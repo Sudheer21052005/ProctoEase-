@@ -22,7 +22,7 @@ class CodeTestCase(BaseModel):
 
 
 class IngestQuestion(BaseModel):
-    type: Literal["mcq", "multi_select", "true_false", "short_answer", "code"]
+    type: Literal["mcq", "multi_select", "true_false", "code"]
     question: str = Field(..., min_length=3, max_length=5_000)
     options: list[str] | None = None
     correct_answer: Any | None = None

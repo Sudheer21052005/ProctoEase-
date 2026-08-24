@@ -52,10 +52,10 @@ async def test_ingestion_endpoint_preview_only(monkeypatch):
         ),
         questions=[
             QuestionCreate(
-                question_text="What is React?",
-                question_type="short_answer",
+                question_text="Is Python interpreted?",
+                question_type="true_false",
                 options=None,
-                correct_answer=None,
+                correct_answer=True,
                 points=2,
                 order_index=0,
             )
@@ -74,8 +74,9 @@ async def test_ingestion_endpoint_preview_only(monkeypatch):
                 "is_published": False,
                 "questions": [
                     {
-                        "type": "short_answer",
-                        "question": "What is React?",
+                        "type": "true_false",
+                        "question": "Is Python interpreted?",
+                        "correct_answer": True,
                         "points": 2,
                     }
                 ],
@@ -117,6 +118,8 @@ async def test_ingestion_endpoint_creates_exam(monkeypatch):
         title = "Created Exam"
         description = "created from JSON"
         duration_minutes = 90
+        start_time = None
+        end_time = None
         is_published = True
         is_active = True
         created_by = uuid.uuid4()

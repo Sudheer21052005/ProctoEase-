@@ -1,11 +1,9 @@
 import { useEffect, useMemo, useState } from "react"
 import { useParams } from "react-router-dom"
-import { ClipboardList, Loader2, Save } from "lucide-react"
-import { toast } from "sonner"
+import { ClipboardList, Loader2 } from "lucide-react"
 import { useExamAttempts, useAnswers } from "@/hooks/useAttempts"
 import { useQuestionsForExam } from "@/hooks/useQuestions"
 import { useAttemptCodeSubmissions } from "@/hooks/useCodeExecution"
-import { useUiStore } from "@/stores/ui.store"
 import FeatureGuard from "@/components/security/FeatureGuard"
 import type { AnswerRead } from "@/api/attempt.api"
 
@@ -27,8 +25,6 @@ export default function ReviewSection() {
   } = useQuestionsForExam(examId || "")
 
   const [selectedAttemptId, setSelectedAttemptId] = useState("")
-  const gradingDrafts = useUiStore((s) => s.gradingDrafts)
-  const setQuestionDraftScore = useUiStore((s) => s.setQuestionDraftScore)
 
   useEffect(() => {
     if (!selectedAttemptId && attempts.length > 0) {
@@ -64,24 +60,8 @@ export default function ReviewSection() {
     return map
   }, [codeSubs])
 
-  const draftScores = useMemo(
-    () => (selectedAttemptId ? gradingDrafts[selectedAttemptId] || {} : {}),
-    [gradingDrafts, selectedAttemptId]
-  )
-
-  const draftManualTotal = useMemo(
-    () => Object.values(draftScores).reduce((acc, v) => acc + (Number.isFinite(v) ? v : 0), 0),
-    [draftScores]
-  )
-
   const autoTotal = answerData?.total_score || 0
   const maxScore = answerData?.max_score || questions.reduce((acc, q) => acc + q.points, 0)
-  const combinedDraft = autoTotal + draftManualTotal
-
-  const saveDraftLocally = () => {
-    if (!selectedAttemptId) return
-    toast.success("Manual grading draft saved")
-  }
 
   if (attemptsLoading || questionsLoading) {
     return (
@@ -131,24 +111,16 @@ export default function ReviewSection() {
           ))}
         </select>
 
-        <div className="grid sm:grid-cols-3 gap-3 mt-4">
+        <div className="grid sm:grid-cols-2 gap-3 mt-4">
           <div className="rounded-lg border border-border p-3">
             <p className="text-xs text-muted-foreground">Auto-Graded Score</p>
             <p className="text-xl font-bold">{autoTotal}</p>
           </div>
           <div className="rounded-lg border border-border p-3">
-            <p className="text-xs text-muted-foreground">Manual Draft Additions</p>
-            <p className="text-xl font-bold">{draftManualTotal}</p>
-          </div>
-          <div className="rounded-lg border border-border p-3">
-            <p className="text-xs text-muted-foreground">Draft Total</p>
-            <p className="text-xl font-bold">{combinedDraft} / {maxScore}</p>
+            <p className="text-xs text-muted-foreground">Max Score</p>
+            <p className="text-xl font-bold">{maxScore}</p>
           </div>
         </div>
-
-        <p className="text-xs text-muted-foreground mt-3">
-          Manual grading draft is local-only. Backend currently exposes answer read APIs but no recruiter grading write endpoint.
-        </p>
       </div>
 
       {answersLoading || codeLoading ? (
@@ -163,10 +135,9 @@ export default function ReviewSection() {
         <div className="space-y-4">
           {questions.map((q, idx) => {
             const answer = answersByQuestion.get(q.id)
-            const isManual = q.question_type === "short_answer" || q.question_type === "code"
+            const isCode = q.question_type === "code"
             const codeForQuestion = codeByQuestion.get(q.id) || []
             const maxPts = q.points
-            const draftValue = draftScores[q.id] ?? 0
 
             return (
               <div key={q.id} className="rounded-xl border border-border bg-card p-5">
@@ -183,11 +154,7 @@ export default function ReviewSection() {
                 <div className="grid md:grid-cols-2 gap-3">
                   <div className="rounded-lg border border-border p-3">
                     <p className="text-xs text-muted-foreground mb-1">Candidate Response</p>
-                    {q.question_type === "short_answer" ? (
-                      <p className="text-sm whitespace-pre-wrap break-words">
-                        {answer?.text_answer || "No response"}
-                      </p>
-                    ) : q.question_type === "code" ? (
+                    {isCode ? (
                       codeForQuestion.length === 0 ? (
                         <p className="text-sm text-muted-foreground">No code submissions.</p>
                       ) : (
@@ -214,7 +181,11 @@ export default function ReviewSection() {
 
                   <div className="rounded-lg border border-border p-3">
                     <p className="text-xs text-muted-foreground mb-1">Scoring</p>
-                    {!isManual ? (
+                    {isCode ? (
+                      <p className="text-sm text-muted-foreground">
+                        Code grading is handled asynchronously via Judge0.
+                      </p>
+                    ) : (
                       <div className="text-sm space-y-1">
                         <p>
                           Auto Result: {answer?.is_correct == null ? "Pending" : answer.is_correct ? "Correct" : "Incorrect"}
@@ -226,27 +197,6 @@ export default function ReviewSection() {
                           Correct Answer: {optionLabel(q.correct_answer)}
                         </p>
                       </div>
-                    ) : (
-                      <div className="space-y-2">
-                        <label className="text-xs text-muted-foreground block">Manual Points (draft)</label>
-                        <input
-                          type="number"
-                          min={0}
-                          max={maxPts}
-                          value={draftValue}
-                          onChange={(e) => {
-                            const parsed = Number.parseInt(e.target.value, 10)
-                            const safe = Number.isFinite(parsed) ? Math.max(0, Math.min(maxPts, parsed)) : 0
-                            if (selectedAttemptId) {
-                              setQuestionDraftScore(selectedAttemptId, q.id, safe)
-                            }
-                          }}
-                          className="w-full max-w-[120px] px-2 py-1.5 rounded border border-border bg-background text-sm"
-                        />
-                        <p className="text-xs text-muted-foreground">
-                          Max {maxPts}. Value contributes to local draft total only.
-                        </p>
-                      </div>
                     )}
                   </div>
                 </div>
@@ -255,16 +205,6 @@ export default function ReviewSection() {
           })}
         </div>
       )}
-
-      <div className="rounded-xl border border-border bg-card p-5 flex justify-end">
-        <button
-          onClick={saveDraftLocally}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium"
-        >
-          <Save className="h-4 w-4" />
-          Save Manual Draft
-        </button>
-      </div>
     </div>
     </FeatureGuard>
   )

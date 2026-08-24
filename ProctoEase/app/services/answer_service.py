@@ -6,7 +6,7 @@ Auto-grading logic:
 - MCQ: compare selected_option_ids[0] with question.correct_answer
 - multi_select: compare sorted sets
 - true_false: compare selected_option_ids[0] with correct_answer
-- short_answer: no auto-grading (needs manual review)
+- code: graded asynchronously by Judge0 (not handled here)
 """
 
 from __future__ import annotations
@@ -148,7 +148,7 @@ async def auto_grade(
     Updates the answers JSON with is_correct and points_earned.
     Returns total score.
 
-    Short-answer questions are skipped (need manual review).
+    Code questions are graded asynchronously by Judge0 and not handled here.
     """
     raw: dict[str, Any] = attempt.answers or {}
     if not raw:
@@ -208,11 +208,6 @@ async def auto_grade(
                 actual = sorted(str(s) for s in selected)
                 is_correct = expected == actual
                 points = question.points if is_correct else 0
-
-        elif q_type == "short_answer":
-            # Skip — needs manual review
-            is_correct = None
-            points = 0
 
         ans_data["is_correct"] = is_correct
         ans_data["points_earned"] = points

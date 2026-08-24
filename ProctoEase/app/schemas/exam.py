@@ -22,8 +22,8 @@ class ExamRead(BaseModel):
     title: str
     description: str | None
     duration_minutes: int
-    start_time: datetime | None
-    end_time: datetime | None
+    start_time: datetime | None = None
+    end_time: datetime | None = None
     is_published: bool
     is_active: bool
     created_by: uuid.UUID

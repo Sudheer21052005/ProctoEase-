@@ -11,7 +11,7 @@ class AnswerSubmit(BaseModel):
     """A single answer for a question."""
     question_id: uuid.UUID
     selected_option_ids: list[str] | None = None  # MCQ / multi_select / true_false
-    text_answer: str | None = None                 # short_answer
+    text_answer: str | None = None                 # reserved; not used by any current question type
 
 
 class BulkAnswerSubmit(BaseModel):

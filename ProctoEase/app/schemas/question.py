@@ -13,7 +13,7 @@ class QuestionCreate(BaseModel):
     question_text: str = Field(..., min_length=3, max_length=5000)
     question_type: str = Field(
         default="mcq",
-        description="mcq | multi_select | true_false | short_answer",
+        description="mcq | multi_select | true_false | code",
     )
     options: list[dict[str, Any]] | None = Field(
         default=None,
@@ -21,7 +21,7 @@ class QuestionCreate(BaseModel):
     )
     correct_answer: Any | None = Field(
         default=None,
-        description='MCQ: "A", MULTI_SELECT: ["A","B"], TRUE_FALSE: true, SHORT: "text"',
+        description='MCQ: "A", MULTI_SELECT: ["A","B"], TRUE_FALSE: true, CODE: {"test_cases": [...]}',
     )
     points: int = Field(default=1, ge=1, le=100)
     order_index: int = Field(default=0, ge=0)

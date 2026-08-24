@@ -22,9 +22,6 @@ export default function QuestionDisplay({ question }: QuestionDisplayProps) {
     setAnswer(question.id, { selected_option_ids: updated })
   }
 
-  const handleText = (text: string) => {
-    setAnswer(question.id, { text_answer: text })
-  }
 
   return (
     <div
@@ -129,16 +126,6 @@ export default function QuestionDisplay({ question }: QuestionDisplayProps) {
             )
           })}
         </div>
-      )}
-
-      {question.type === "short_answer" && (
-        <textarea
-          rows={6}
-          placeholder="Type your answer here…"
-          value={answer?.text_answer || ""}
-          onChange={(e) => handleText(e.target.value)}
-          className="w-full px-4 py-3 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary resize-none"
-        />
       )}
     </div>
   )
