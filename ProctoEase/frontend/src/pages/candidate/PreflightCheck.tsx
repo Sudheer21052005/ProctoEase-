@@ -184,6 +184,7 @@ export default function PreflightCheck() {
     // Guard against duplicate attempt creation if data is already available client-side.
     const existingAttemptId = findActiveAttemptId(myAttempts)
     if (existingAttemptId) {
+      document.documentElement.requestFullscreen?.().catch(() => {})
       setActiveAttempt(examId, existingAttemptId)
       navigate(`/candidate/exam/${examId}/attempt/${existingAttemptId}`)
       return
@@ -198,6 +199,9 @@ export default function PreflightCheck() {
       toast.error("Capture verification photo before starting the exam")
       return
     }
+
+    // Synchronously request fullscreen from user gesture
+    document.documentElement.requestFullscreen?.().catch(() => {})
 
     createAttempt.mutate({ examId, payload: { verification_image_base64: verificationImage } }, {
       onSuccess: (attempt) => {
@@ -218,6 +222,11 @@ export default function PreflightCheck() {
             navigate(`/candidate/exam/${examId}/attempt/${activeAttemptId}`)
             return
           }
+        }
+
+        // If createAttempt failed, exit fullscreen so candidate is not stranded
+        if (document.fullscreenElement) {
+          document.exitFullscreen().catch(() => {})
         }
 
         toast.error(axiosErr.response?.data?.detail || "Failed to start exam")

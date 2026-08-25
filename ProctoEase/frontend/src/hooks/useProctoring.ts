@@ -86,7 +86,7 @@ export function useProctoring({
   attemptId,
   onMaxViolations,
 }: UseProctoringOptions) {
-  const { addViolation, setFullscreen, isMaxViolations } = useProctoringStore()
+  const { addViolation, setFullscreen, setIsFullscreenArmed, isMaxViolations } = useProctoringStore()
   const wsRef = useRef<WebSocket | null>(null)
   const eventQueueRef = useRef<Array<{
     type: "event"
@@ -586,37 +586,57 @@ export function useProctoring({
     }
   }, [enabled, reportViolation, captureSnapshot])
 
+  // Sync store to the real fullscreen state exactly once on mount
+  useEffect(() => {
+    const s = useProctoringStore.getState()
+    const initialFs = !!document.fullscreenElement
+    if (s.isFullscreen !== initialFs) s.setFullscreen(initialFs)
+    if (initialFs && !s.isFullscreenArmed) s.setIsFullscreenArmed(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // ── Fullscreen exit detection ──
   useEffect(() => {
     if (!enabled) return
 
     const handleFsChange = async () => {
       const isFs = !!document.fullscreenElement
-      setFullscreen(isFs)
-      if (!isFs) {
-        const now = Date.now()
-        let snapshot: string | undefined
-        if (SNAPSHOT_EVENTS.has("fullscreen_exit")) {
-          const lastSnapAt = lastSnapshotByTypeRef.current["fullscreen_exit"] || 0
-          if (now - lastSnapAt >= SNAPSHOT_THROTTLE_MS) {
-            snapshot = await captureSnapshot()
-            if (snapshot) {
-              lastSnapshotByTypeRef.current["fullscreen_exit"] = now
+      const store = useProctoringStore.getState()
+      if (store.isFullscreen !== isFs) {
+        store.setFullscreen(isFs)
+      }
+
+      if (isFs) {
+        if (!store.isFullscreenArmed) {
+          store.setIsFullscreenArmed(true)
+        }
+      } else {
+        // Record violation ONLY if fullscreen was already armed
+        if (store.isFullscreenArmed) {
+          const now = Date.now()
+          let snapshot: string | undefined
+          if (SNAPSHOT_EVENTS.has("fullscreen_exit")) {
+            const lastSnapAt = lastSnapshotByTypeRef.current["fullscreen_exit"] || 0
+            if (now - lastSnapAt >= SNAPSHOT_THROTTLE_MS) {
+              snapshot = await captureSnapshot()
+              if (snapshot) {
+                lastSnapshotByTypeRef.current["fullscreen_exit"] = now
+              }
             }
           }
+
+          reportViolation("fullscreen_exit", "Exited fullscreen mode", 2, undefined, snapshot)
+
+          // Try to re-enter fullscreen
+          document.documentElement.requestFullscreen().catch(() => {})
         }
-
-        reportViolation("fullscreen_exit", "Exited fullscreen mode", 2, undefined, snapshot)
-
-        // Try to re-enter fullscreen
-        document.documentElement.requestFullscreen().catch(() => {})
       }
     }
 
     document.addEventListener("fullscreenchange", handleFsChange)
     return () =>
       document.removeEventListener("fullscreenchange", handleFsChange)
-  }, [enabled, setFullscreen, reportViolation, captureSnapshot])
+  }, [enabled, reportViolation, captureSnapshot])
 
   // ── Keyboard shortcuts detection ──
   useEffect(() => {

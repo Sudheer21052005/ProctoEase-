@@ -29,6 +29,7 @@ interface ProctoringState {
   violations: Violation[]
   violationCount: number
   isFullscreen: boolean
+  isFullscreenArmed: boolean
   webcamActive: boolean
   showWarning: boolean
   warningMessage: string
@@ -36,6 +37,7 @@ interface ProctoringState {
   addViolation: (type: Violation["type"], description: string) => void
   setViolationCount: (count: number) => void
   setFullscreen: (v: boolean) => void
+  setIsFullscreenArmed: (v: boolean) => void
   setWebcamActive: (v: boolean) => void
   showWarningBanner: (msg: string) => void
   dismissWarning: () => void
@@ -47,6 +49,7 @@ export const useProctoringStore = create<ProctoringState>((set, get) => ({
   violations: [],
   violationCount: 0,
   isFullscreen: false,
+  isFullscreenArmed: false,
   webcamActive: false,
   showWarning: false,
   warningMessage: "",
@@ -69,6 +72,7 @@ export const useProctoringStore = create<ProctoringState>((set, get) => ({
   setViolationCount: (count) => set({ violationCount: count }),
 
   setFullscreen: (v) => set({ isFullscreen: v }),
+  setIsFullscreenArmed: (v) => set({ isFullscreenArmed: v }),
   setWebcamActive: (v) => set({ webcamActive: v }),
 
   showWarningBanner: (msg) => set({ showWarning: true, warningMessage: msg }),
@@ -81,6 +85,7 @@ export const useProctoringStore = create<ProctoringState>((set, get) => ({
       violations: [],
       violationCount: 0,
       isFullscreen: false,
+      isFullscreenArmed: false,
       webcamActive: false,
       showWarning: false,
       warningMessage: "",

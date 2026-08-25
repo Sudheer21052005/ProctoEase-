@@ -4,6 +4,7 @@ import { Maximize2, AlertTriangle } from "lucide-react"
 
 export default function FullscreenWarning() {
   const isFullscreen = useProctoringStore((s) => s.isFullscreen)
+  const isFullscreenArmed = useProctoringStore((s) => s.isFullscreenArmed)
 
   const requestFullscreen = () => {
     document.documentElement.requestFullscreen?.().catch(() => {})
@@ -45,9 +46,13 @@ export default function FullscreenWarning() {
             </div>
 
             <div>
-              <h2 className="text-xl font-bold text-white mb-2">Fullscreen required</h2>
+              <h2 className="text-xl font-bold text-white mb-2">
+                {isFullscreenArmed ? "Fullscreen required" : "Enter fullscreen to begin"}
+              </h2>
               <p className="text-sm text-slate-400 leading-relaxed">
-                Exiting fullscreen is a proctoring violation. Return to fullscreen to continue the exam.
+                {isFullscreenArmed
+                  ? "Exiting fullscreen is a proctoring violation. Return to fullscreen to continue the exam."
+                  : "The exam must be taken in fullscreen mode. Click below to enter fullscreen and start."}
               </p>
             </div>
 
@@ -56,12 +61,14 @@ export default function FullscreenWarning() {
               className="flex items-center gap-2.5 px-7 py-3 rounded-full bg-[#6366f1] hover:bg-[#4f46e5] text-white font-semibold text-sm transition-all duration-200 hover:-translate-y-[1px] hover:shadow-[0_8px_24px_-8px_rgba(99,102,241,0.55)] active:scale-[0.98]"
             >
               <Maximize2 className="h-4 w-4" strokeWidth={2} />
-              Return to fullscreen
+              {isFullscreenArmed ? "Return to fullscreen" : "Enter fullscreen"}
             </button>
 
-            <p className="text-xs text-slate-600">
-              This violation has been recorded.
-            </p>
+            {isFullscreenArmed && (
+              <p className="text-xs text-slate-600">
+                This violation has been recorded.
+              </p>
+            )}
           </motion.div>
         </motion.div>
       )}
