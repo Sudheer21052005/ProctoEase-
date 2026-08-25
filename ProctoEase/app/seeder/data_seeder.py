@@ -150,7 +150,11 @@ def _question_payloads(exam_title: str) -> list[QuestionCreate]:
             order_index=1,
         ),
         QuestionCreate(
-            question_text="Coding: Implement a function that validates exam time windows.",
+            question_text=(
+                "Coding: Implement a function that validates exam time windows. "
+                "Your solution reads input from standard input (stdin) and writes the answer (true/false) to standard output (stdout). "
+                "Each test case is run separately with its own stdin."
+            ),
             question_type="code",
             options=None,
             correct_answer={
@@ -164,7 +168,11 @@ def _question_payloads(exam_title: str) -> list[QuestionCreate]:
             order_index=2,
         ),
         QuestionCreate(
-            question_text="Coding: Detect suspicious activity bursts from event timestamps.",
+            question_text=(
+                "Coding: Detect suspicious activity bursts from event timestamps. "
+                "Your solution reads input from standard input (stdin) and writes the answer (true/false) to standard output (stdout). "
+                "Each test case is run separately with its own stdin."
+            ),
             question_type="code",
             options=None,
             correct_answer={

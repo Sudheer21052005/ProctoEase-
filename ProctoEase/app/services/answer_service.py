@@ -21,8 +21,10 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.exceptions import AttemptNotFound, AttemptAlreadySubmitted, BadRequest
 from app.models.attempt import ExamAttempt
+from app.models.code_submission import CodeSubmission, SubmissionStatus
 from app.models.question import Question
 from app.schemas.answer import AnswerSubmit, AnswerRead, AnswersResponse
+from app.services import code_execution_service
 
 
 async def save_answers(
@@ -144,11 +146,9 @@ async def auto_grade(
     tenant_id: uuid.UUID,
 ) -> int:
     """
-    Auto-grade MCQ, multi_select, and true_false answers.
+    Auto-grade MCQ, multi_select, true_false, and code answers.
     Updates the answers JSON with is_correct and points_earned.
     Returns total score.
-
-    Code questions are graded asynchronously by Judge0 and not handled here.
     """
     raw: dict[str, Any] = attempt.answers or {}
     if not raw:
@@ -209,6 +209,10 @@ async def auto_grade(
                 is_correct = expected == actual
                 points = question.points if is_correct else 0
 
+        elif q_type == "code":
+            # Grade code question using seeded test cases
+            is_correct, points = await grade_code_question(db, attempt, question, tenant_id)
+
         ans_data["is_correct"] = is_correct
         ans_data["points_earned"] = points
         total_score += points
@@ -221,6 +225,106 @@ async def auto_grade(
 
 
 # ── Internal helpers ────────────────────────────────────────────
+
+
+async def _canonicalize_stdout_to_bool(stdout: str) -> bool | None:
+    """Convert trimmed, lowercased stdout to bool if it looks like a boolean."""
+    val = stdout.strip().lower()
+    if val in {"true", "1", "yes", "t"}:
+        return True
+    if val in {"false", "0", "no", "f"}:
+        return False
+    return None
+
+
+async def grade_code_question(
+    db: AsyncSession,
+    attempt: ExamAttempt,
+    question: Question,
+    tenant_id: uuid.UUID,
+) -> tuple[bool | None, int]:
+    """
+    Grade a single code question for an attempt using seeded test_cases.
+    Returns (is_correct, points_earned). Updates CodeSubmission status and attempt.answers.
+    """
+    correct_answer = question.correct_answer or {}
+    test_cases = correct_answer.get("test_cases") or []
+    if not test_cases:
+        # No test cases defined
+        return None, 0
+
+    # Fetch latest code submission for this attempt+question (tenant-scoped)
+    subs_result = await db.execute(
+        select(CodeSubmission)
+        .where(
+            CodeSubmission.attempt_id == attempt.id,
+            CodeSubmission.question_id == question.id,
+            CodeSubmission.tenant_id == tenant_id,
+        )
+        .order_by(CodeSubmission.created_at.desc())
+    )
+    latest_sub = subs_result.scalars().first()
+    if not latest_sub:
+        return None, 0
+
+    source_code = latest_sub.source_code
+    language_id = latest_sub.language_id
+
+    passed = 0
+    total_cases = len(test_cases)
+
+    # Execute each test case, collect results in memory
+    for tc in test_cases:
+        stdin = tc.get("input", "")
+        expected = tc.get("expected")
+        resp = await code_execution_service._execute_single_test_case(
+            source_code, language_id, stdin
+        )
+        stdout = resp.get("stdout") or ""
+        # Truncate stdout at 10KB
+        if len(stdout) > 10_000:
+            stdout = stdout[:10_000]
+
+        # Compare
+        if isinstance(expected, bool):
+            got = await _canonicalize_stdout_to_bool(stdout)
+            case_passed = got == expected
+        else:
+            case_passed = stdout.strip().lower() == str(expected).strip().lower()
+
+        if case_passed:
+            passed += 1
+
+    # Proportional scoring
+    points_earned = round(question.points * passed / total_cases) if total_cases else 0
+    is_correct = passed == total_cases and total_cases > 0
+
+    # Persist aggregated status on latest submission
+    latest_sub.status = (
+        SubmissionStatus.ACCEPTED.value if is_correct else SubmissionStatus.WRONG_ANSWER.value
+    )
+    # Note: we do not store per-case results (migration-free)
+
+    # Update attempt answers JSON
+    raw = attempt.answers or {}
+    ans_key = str(question.id)
+    if ans_key in raw:
+        raw[ans_key]["is_correct"] = is_correct
+        raw[ans_key]["points_earned"] = points_earned
+    else:
+        raw[ans_key] = {
+            "question_id": ans_key,
+            "selected_option_ids": None,
+            "text_answer": latest_sub.source_code,
+            "is_correct": is_correct,
+            "points_earned": points_earned,
+        }
+    attempt.answers = raw
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(attempt, "answers")
+
+    await db.flush()
+    return is_correct, points_earned
 
 
 async def _get_own_attempt(

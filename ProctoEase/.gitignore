@@ -6,3 +6,10 @@ __pycache__/
 dist/
 build/
 .pytest_cache/
+
+# Scratch & coordination files
+PLAN.md
+IMPLEMENTATION_PLAN.md
+summary.md
+nemetronsummary.md
+CLAUDE.md

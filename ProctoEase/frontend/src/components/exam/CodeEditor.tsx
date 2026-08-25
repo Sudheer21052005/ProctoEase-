@@ -15,6 +15,19 @@ interface CodeEditorProps {
   onChange?: (code: string) => void
 }
 
+const PYTHON_STUB = `import sys
+
+def solve():
+    data = sys.stdin.read().strip()
+    if not data:
+        return
+    # TODO: implement logic, then print "true" or "false"
+    print("false")
+
+if __name__ == "__main__":
+    solve()
+`;
+
 export default function CodeEditor({
   attemptId,
   questionId,
@@ -24,7 +37,7 @@ export default function CodeEditor({
   const { data: languages = [], isError: languagesError } = useCodeLanguages()
   const runSubmission = useRunCodeSubmission()
   const [languageId, setLanguageId] = useState<number>(71) // Python default in Judge0
-  const [code, setCode] = useState(initialCode)
+  const [code, setCode] = useState(() => initialCode || PYTHON_STUB)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [submission, setSubmission] = useState<CodeSubmission | null>(null)
 

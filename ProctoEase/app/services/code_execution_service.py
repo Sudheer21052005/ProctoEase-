@@ -5,6 +5,7 @@ Phase 6: Judge0 Code Execution.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 
@@ -53,6 +54,28 @@ async def _judge0_get(path: str) -> dict:
     except (httpx.HTTPError, httpx.ConnectError) as exc:
         logger.error("Judge0 GET %s failed: %s", path, exc)
         raise Judge0Unavailable()
+
+
+async def _execute_single_test_case(
+    source_code: str,
+    language_id: int,
+    stdin: str,
+) -> dict:
+    """Execute code once with given stdin using Judge0 wait=true, with bounded poll fallback.
+    Returns the Judge0 response dict (stdout, stderr, status, exit_code, time, memory, token)."""
+    # Primary: wait=true
+    resp = await _judge0_post(
+        "/submissions?base64_encoded=false&wait=true",
+        {"source_code": source_code, "language_id": language_id, "stdin": stdin},
+    )
+    # If non-terminal, bounded poll (max 3 attempts, 500ms each)
+    for _ in range(3):
+        j_status = resp.get("status", {}).get("id", 0)
+        if j_status >= 3:  # terminal statuses start at 3 in JUDGE0_STATUS_MAP
+            break
+        await asyncio.sleep(0.5)
+        resp = await _judge0_get(f"/submissions/{resp['token']}?base64_encoded=false")
+    return resp
 
 
 # ── Public API ───────────────────────────────────────────────────
