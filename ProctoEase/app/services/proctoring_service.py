@@ -11,7 +11,11 @@ import uuid
 from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config.violation_guidelines import CANONICAL_VIOLATION_TYPES, VIOLATION_GUIDELINES
+from app.config.violation_guidelines import (
+    CANONICAL_VIOLATION_TYPES,
+    VIOLATION_GUIDELINES,
+    counts_toward_gate,
+)
 from app.core.exceptions import BadRequest, NotFound
 from app.models.proctoring_event import ProctoringEvent
 from app.models.attempt import ExamAttempt
@@ -157,13 +161,28 @@ async def count_violations(
     attempt_id: uuid.UUID,
     tenant_id: uuid.UUID,
 ) -> dict:
-    """Return total violation count and breakdown by type."""
+    """
+    Return violation counts and breakdown by type.
+
+    - ``total``      : every recorded event (history/reporting view).
+    - ``gate_total`` : only events that count toward the exam-termination
+                       threshold, i.e. excluding NON_GATING_VIOLATIONS such as
+                       periodic_check. This is what the WebSocket acks back to
+                       the client as ``violation_count``.
+
+    Both are returned so reporting keeps the true event total while the
+    auto-submit gate uses the filtered count.
+    """
     events = await list_events(db, attempt_id, tenant_id)
     by_type: dict[str, int] = {}
+    gate_total = 0
     for evt in events:
         by_type[evt.event_type] = by_type.get(evt.event_type, 0) + 1
+        if counts_toward_gate(evt.event_type):
+            gate_total += 1
     return {
         "attempt_id": attempt_id,
         "total": len(events),
+        "gate_total": gate_total,
         "by_type": by_type,
     }

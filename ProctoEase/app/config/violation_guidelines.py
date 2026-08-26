@@ -33,6 +33,27 @@ DERIVED_VIOLATIONS: tuple[str, ...] = (
 CANONICAL_VIOLATION_TYPES: tuple[str, ...] = BASE_VIOLATIONS + DERIVED_VIOLATIONS
 
 
+# Benign/observational event types.
+#
+# These are recorded in the event history and still contribute to the risk score
+# (periodic_check carries weight 0.05 below), but they must NOT consume the
+# candidate's max-violation budget — a periodic snapshot every 75s is not
+# misconduct, and counting it would auto-submit an otherwise clean attempt.
+#
+# The frontend mirrors this set in frontend/src/lib/proctoring.catalog.ts.
+NON_GATING_VIOLATIONS: frozenset[str] = frozenset({"periodic_check"})
+
+# Event types that DO count toward the exam-termination threshold.
+GATING_VIOLATION_TYPES: tuple[str, ...] = tuple(
+    t for t in CANONICAL_VIOLATION_TYPES if t not in NON_GATING_VIOLATIONS
+)
+
+
+def counts_toward_gate(event_type: str) -> bool:
+    """True when an event type consumes the max-violation (termination) budget."""
+    return event_type not in NON_GATING_VIOLATIONS
+
+
 DEFAULT_RISK_WEIGHTS: dict[str, float] = {
     "tab_switch": 0.3,
     "fullscreen_exit": 0.3,

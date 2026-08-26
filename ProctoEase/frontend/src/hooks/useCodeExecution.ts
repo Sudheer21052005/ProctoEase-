@@ -4,6 +4,8 @@ import {
   isTerminalCodeStatus,
   type CodeSubmission,
   type CodeSubmitRequest,
+  type CodeRunRequest,
+  type CodeRunResponse,
 } from "@/api/code.api"
 
 const POLL_INTERVAL_MS = 1200
@@ -48,6 +50,14 @@ export function useRunCodeSubmission() {
       }
 
       return result
+    },
+  })
+}
+
+export function useRunCodePublic() {
+  return useMutation({
+    mutationFn: async ({ attemptId, data }: { attemptId: string; data: CodeRunRequest }): Promise<CodeRunResponse> => {
+      return await codeApi.runPublic(attemptId, data)
     },
   })
 }

@@ -160,7 +160,10 @@ def _question_payloads(exam_title: str) -> list[QuestionCreate]:
             correct_answer={
                 "difficulty": "medium",
                 "test_cases": [
-                    {"input": "2026-04-10T10:00Z,2026-04-10T12:00Z,2026-04-10T11:00Z", "expected": True},
+                    # First case is public: candidates can see it and use
+                    # "Run Sample Tests". The rest stay hidden and are only
+                    # evaluated during grading on submit.
+                    {"input": "2026-04-10T10:00Z,2026-04-10T12:00Z,2026-04-10T11:00Z", "expected": True, "is_public": True},
                     {"input": "2026-04-10T10:00Z,2026-04-10T12:00Z,2026-04-10T13:00Z", "expected": False},
                 ],
             },
@@ -178,7 +181,8 @@ def _question_payloads(exam_title: str) -> list[QuestionCreate]:
             correct_answer={
                 "difficulty": "hard",
                 "test_cases": [
-                    {"input": "[1,2,4,7,10,12]", "expected": True},
+                    # First case public, second hidden (see note above).
+                    {"input": "[1,2,4,7,10,12]", "expected": True, "is_public": True},
                     {"input": "[1,20,40]", "expected": False},
                 ],
             },

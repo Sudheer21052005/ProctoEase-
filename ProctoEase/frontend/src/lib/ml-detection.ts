@@ -43,14 +43,12 @@ const GAZE_PITCH_THRESHOLD = 0.22
 // Singleton model instances — loaded once, reused
 let faceLandmarker: FaceLandmarker | null = null
 let objectDetector: cocoSsd.ObjectDetection | null = null
-let modelsLoading = false
 let modelsLoaded = false
 let modelLoadPromise: Promise<boolean> | null = null
 
 export async function loadMLModels(): Promise<boolean> {
   if (modelsLoaded) return true
   if (modelLoadPromise) return modelLoadPromise
-  modelsLoading = true
 
   modelLoadPromise = (async () => {
     try {
@@ -84,8 +82,6 @@ export async function loadMLModels(): Promise<boolean> {
     } catch (error) {
       console.error("[ProctoEase ML] Failed to load models:", error)
       return false
-    } finally {
-      modelsLoading = false
     }
   })()
 

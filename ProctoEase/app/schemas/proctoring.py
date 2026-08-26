@@ -81,6 +81,13 @@ class ViolationCount(BaseModel):
     """Summary violation count for an attempt."""
     attempt_id: uuid.UUID
     total: int
+    gate_total: int = Field(
+        default=0,
+        description=(
+            "Events counting toward the exam-termination threshold "
+            "(excludes benign types such as periodic_check)."
+        ),
+    )
     by_type: dict[str, int]
 
 

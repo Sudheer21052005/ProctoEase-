@@ -1,6 +1,7 @@
 import { useEffect, useCallback, useRef } from "react"
 import { useProctoringStore } from "@/stores/proctoring.store"
 import { API_BASE_URL } from "@/lib/constants"
+import type { CanonicalViolationType } from "@/lib/proctoring.catalog"
 import {
   loadMLModels,
   detectFacesAndGaze,
@@ -14,29 +15,6 @@ interface UseProctoringOptions {
   attemptId?: string
   onMaxViolations: () => void
 }
-
-type CanonicalViolationType =
-  | "tab_switch"
-  | "fullscreen_exit"
-  | "keyboard_block"
-  | "copy_paste"
-  | "right_click"
-  | "browser_devtools"
-  | "inactivity"
-  | "multiple_faces"
-  | "no_face"
-  | "audio_anomaly"
-  | "custom"
-  | "rapid_tab_switching"
-  | "suspicious_activity_burst"
-  | "bulk_paste_detected"
-  | "impossible_answer_speed"
-  | "periodic_check"
-  | "face_inconsistency"
-  | "gaze_away"
-  | "head_turned"
-  | "phone_detected"
-  | "unauthorized_object"
 
 const DERIVED_TYPES = new Set<CanonicalViolationType>([
   "rapid_tab_switching",
@@ -86,7 +64,7 @@ export function useProctoring({
   attemptId,
   onMaxViolations,
 }: UseProctoringOptions) {
-  const { addViolation, setFullscreen, setIsFullscreenArmed, isMaxViolations } = useProctoringStore()
+  const { addViolation, isMaxViolations } = useProctoringStore()
   const wsRef = useRef<WebSocket | null>(null)
   const eventQueueRef = useRef<Array<{
     type: "event"
@@ -122,6 +100,7 @@ export function useProctoring({
   const captureVideoRef = useRef<HTMLVideoElement | null>(null)
   const captureCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const captureStreamRef = useRef<MediaStream | null>(null)
+  const maxViolationsFiredRef = useRef(false)
 
   const ensureCaptureStream = useCallback(async () => {
     const liveVideo = document.querySelector(LIVE_WEBCAM_SELECTOR) as HTMLVideoElement | null
@@ -189,7 +168,12 @@ export function useProctoring({
   }, [ensureCaptureStream])
 
   const checkAndTrigger = useCallback(() => {
+    // Latch: auto-submit must fire at most once per attempt. Without this,
+    // every subsequent violation re-triggers onMaxViolations (duplicate toasts
+    // and repeated submit attempts) once the threshold has been crossed.
+    if (maxViolationsFiredRef.current) return
     if (isMaxViolations()) {
+      maxViolationsFiredRef.current = true
       onMaxViolations()
     }
   }, [isMaxViolations, onMaxViolations])

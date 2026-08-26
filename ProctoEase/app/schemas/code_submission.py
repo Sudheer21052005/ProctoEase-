@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -42,3 +43,21 @@ class LanguageRead(BaseModel):
     """Judge0 language info."""
     id: int
     name: str
+
+
+class CodeRunCaseResult(BaseModel):
+    input: str
+    expected: Any
+    actual: str
+    passed: bool
+    status: str
+
+
+class CodeRunRequest(BaseModel):
+    source_code: str = Field(..., min_length=1, max_length=50_000)
+    language_id: int = Field(..., ge=1)
+    question_id: uuid.UUID
+
+
+class CodeRunResponse(BaseModel):
+    cases: list[CodeRunCaseResult]

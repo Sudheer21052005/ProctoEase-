@@ -402,6 +402,7 @@ export default function ExamScreen() {
                     questionId={currentQuestion.id}
                     initialCode={answers[currentQuestion.id]?.text_answer || ""}
                     onChange={(code) => setAnswer(currentQuestion.id, { text_answer: code })}
+                    publicTestCases={currentQuestion.public_test_cases || []}
                   />
                 )}
               </motion.div>

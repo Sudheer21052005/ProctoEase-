@@ -74,8 +74,10 @@ export default function RecruiterDashboard() {
   const risk = stats?.risk_distribution || EMPTY_RISK_DISTRIBUTION
   const riskTotal = Object.values(risk).reduce((a, b) => a + b, 0) || 1
 
+  // average_risk_score is `number | null` on the backend and undefined while the
+  // query is loading — the nullish check narrows both before any comparison.
   const avgRiskLevel =
-    avgRisk === undefined ? null
+    avgRisk == null ? null
     : avgRisk > 0.75 ? { label: "CRITICAL", color: "text-red-400" }
     : avgRisk > 0.55 ? { label: "HIGH",     color: "text-orange-400" }
     : avgRisk > 0.3  ? { label: "MEDIUM",   color: "text-amber-400" }
@@ -141,7 +143,7 @@ export default function RecruiterDashboard() {
         <KpiTile icon={Users}       label="Total Attempts"   value={loadingStats ? "…" : totalAttempts}   accent="text-[#38bdf8]"  iconBg="bg-sky-500/10 border border-sky-500/20" />
         <KpiTile icon={Users}       label="Unique Candidates" value={loadingStats ? "…" : uniqueCandidates} accent="text-violet-400" iconBg="bg-violet-500/10 border border-violet-500/20" />
         <KpiTile icon={Shield}      label="Avg Risk Score"
-          value={loadingStats ? "…" : avgRisk !== undefined ? `${(avgRisk * 100).toFixed(0)}%` : "N/A"}
+          value={loadingStats ? "…" : avgRisk != null ? `${(avgRisk * 100).toFixed(0)}%` : "N/A"}
           accent={avgRiskLevel?.color ?? "text-slate-400"}
           iconBg="bg-slate-500/10 border border-slate-500/20"
         />

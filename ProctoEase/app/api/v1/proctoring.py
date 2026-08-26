@@ -78,7 +78,10 @@ async def proctoring_ws(
     Authentication: pass token as query param ?token=<jwt>
     Client sends: {"type": "event", "event_type": "tab_switch", "detail": {...}, "severity": 1}
     Client sends: {"type": "heartbeat"}
-    Server responds: {"type": "ack", "violation_count": N}
+    Server responds: {"type": "ack", "violation_count": N, "event_total": M}
+
+    ``violation_count`` counts only gating violations (excludes periodic_check);
+    ``event_total`` is every recorded event.
     """
     # Authenticate via query param
     token = websocket.query_params.get("token")
@@ -138,7 +141,10 @@ async def proctoring_ws(
 
                         await websocket.send_json({
                             "type": "ack",
-                            "violation_count": count["total"],
+                            # gate_total, not total: benign periodic_check events
+                            # must not push the client toward auto-submit.
+                            "violation_count": count["gate_total"],
+                            "event_total": count["total"],
                         })
                     except Exception as e:
                         await db.rollback()

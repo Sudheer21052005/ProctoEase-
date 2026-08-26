@@ -42,6 +42,23 @@ export interface Language {
   name: string
 }
 
+/* ── Public test-case run (ephemeral) ── */
+export interface CodeRunCaseResult {
+  input: string
+  expected: unknown
+  actual: string
+  passed: boolean
+  status: string
+}
+export interface CodeRunResponse {
+  cases: CodeRunCaseResult[]
+}
+export interface CodeRunRequest {
+  source_code: string
+  language_id: number
+  question_id: string
+}
+
 export const NON_TERMINAL_STATUSES: CodeSubmissionStatus[] = [
   "queued",
   "processing",
@@ -67,4 +84,9 @@ export const codeApi = {
 
   listLanguages: () =>
     api.get<Language[]>("/code/languages").then((r) => r.data),
+
+  runPublic: (attemptId: string, data: CodeRunRequest) =>
+    api
+      .post<CodeRunResponse>(`/attempts/${attemptId}/code/run`, data)
+      .then((r) => r.data),
 }

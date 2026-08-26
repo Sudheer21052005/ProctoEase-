@@ -259,6 +259,27 @@ async def test_grade_code_question_multiple_submissions_uses_latest(sample_attem
     assert points == 10
 
 
+def test_extract_public_cases_only():
+    # Simulate the logic used in list_questions for candidates
+    test_cases = [
+        {"input": "1", "expected": True, "is_public": True},
+        {"input": "2", "expected": False},  # no is_public -> hidden
+        {"input": "3", "expected": True, "is_public": False},
+        {"input": "4", "expected": False, "is_public": True},
+    ]
+    public_cases = [
+        {"input": tc.get("input"), "expected": tc.get("expected")}
+        for tc in test_cases if tc.get("is_public")
+    ]
+    assert len(public_cases) == 2
+    assert public_cases[0]["input"] == "1"
+    assert public_cases[1]["input"] == "4"
+    # Ensure hidden cases not present
+    inputs = {tc["input"] for tc in public_cases}
+    assert "2" not in inputs
+    assert "3" not in inputs
+
+
 @pytest.mark.asyncio
 async def test_build_answers_response_includes_graded_code():
     # Create an attempt with a graded code answer in attempt.answers
@@ -310,3 +331,382 @@ async def test_build_answers_response_includes_graded_code():
     assert ans.points_earned == 5
     assert resp.total_score == 5
     assert resp.max_score == 5
+
+
+# ---- Run endpoint tests ----
+
+@pytest.mark.asyncio
+async def test_run_endpoint_all_pass(monkeypatch):
+    from app.core.limiter import limiter
+    limiter.enabled = False
+    from app.api.v1.code import run_code_public
+    from app.models.attempt import ExamAttempt
+    from app.models.question import Question, QuestionType
+    from uuid import uuid4
+    from datetime import datetime, timezone
+
+    attempt_id = uuid4()
+    question_id = uuid4()
+    tenant_id = uuid4()
+    candidate_id = uuid4()
+
+    attempt = ExamAttempt(
+        id=attempt_id,
+        exam_id=uuid4(),
+        candidate_id=candidate_id,
+        tenant_id=tenant_id,
+        status="started",
+        is_active=True,
+        started_at=datetime.now(timezone.utc),
+        answers={},
+    )
+    question = Question(
+        id=question_id,
+        exam_id=attempt.exam_id,
+        question_text="code q",
+        question_type=QuestionType.CODE.value,
+        correct_answer={
+            "test_cases": [
+                {"input": "1", "expected": True, "is_public": True},
+                {"input": "0", "expected": False, "is_public": True},
+            ]
+        },
+        points=10,
+        order_index=0,
+        is_active=True,
+    )
+
+    class MockDB:
+        def __init__(self):
+            self.flushed = False
+        async def execute(self, stmt):
+            # Determine which select: first for attempt, second for question
+            # We'll inspect statement to decide (simple: check if it's selecting ExamAttempt or Question)
+            from sqlalchemy import inspect
+            # crude: if 'exam_attempts' in str(stmt):
+            if "exam_attempts" in str(stmt).lower():
+                class Result:
+                    def scalar_one_or_none(self_inner):
+                        return attempt
+                return Result()
+            else:
+                class Result:
+                    def scalar_one_or_none(self_inner):
+                        return question
+                return Result()
+        async def flush(self):
+            self.flushed = True
+
+    db = MockDB()
+
+    # Mock _execute_single_test_case
+    async def mock_execute(source_code, language_id, stdin):
+        if stdin == "1":
+            return {"stdout": "true\n", "status": {"id": 3}}
+        elif stdin == "0":
+            return {"stdout": "false\n", "status": {"id": 3}}
+        return {"stdout": "", "status": {"id": 3}}
+
+    from app.services import code_execution_service
+    monkeypatch.setattr(code_execution_service, "_execute_single_test_case", mock_execute)
+
+    # Mock current user
+    class MockUser:
+        def __init__(self, uid, tid):
+            self.id = uid
+            self.tenant_id = tid
+            self.role = "candidate"
+
+    user = MockUser(candidate_id, tenant_id)
+
+    # Prepare request payload
+    from app.schemas.code_submission import CodeRunRequest
+    payload = CodeRunRequest(source_code="print('true')", language_id=71, question_id=question_id)
+
+    # Call endpoint function directly
+    resp = await run_code_public(request=None, attempt_id=attempt_id, payload=payload, user=user, db=db)
+
+    assert len(resp.cases) == 2
+    for case in resp.cases:
+        assert case.passed is True
+        assert case.actual.strip().lower() in ("true", "false")
+    # Ensure no DB flush (no persistence)
+    assert db.flushed is False
+
+
+@pytest.mark.asyncio
+async def test_run_endpoint_partial_pass(monkeypatch):
+    from app.core.limiter import limiter
+    limiter.enabled = False
+    from app.api.v1.code import run_code_public
+    from app.models.attempt import ExamAttempt
+    from app.models.question import Question, QuestionType
+    from uuid import uuid4
+    from datetime import datetime, timezone
+
+    attempt_id = uuid4()
+    question_id = uuid4()
+    tenant_id = uuid4()
+    candidate_id = uuid4()
+
+    attempt = ExamAttempt(
+        id=attempt_id,
+        exam_id=uuid4(),
+        candidate_id=candidate_id,
+        tenant_id=tenant_id,
+        status="started",
+        is_active=True,
+        started_at=datetime.now(timezone.utc),
+        answers={},
+    )
+    question = Question(
+        id=question_id,
+        exam_id=attempt.exam_id,
+        question_text="code q",
+        question_type=QuestionType.CODE.value,
+        correct_answer={
+            "test_cases": [
+                {"input": "1", "expected": True, "is_public": True},
+                {"input": "0", "expected": False, "is_public": True},
+            ]
+        },
+        points=10,
+        order_index=0,
+        is_active=True,
+    )
+
+    class MockDB:
+        def __init__(self):
+            self.flushed = False
+        async def execute(self, stmt):
+            if "exam_attempts" in str(stmt).lower():
+                class Result:
+                    def scalar_one_or_none(self_inner):
+                        return attempt
+                return Result()
+            else:
+                class Result:
+                    def scalar_one_or_none(self_inner):
+                        return question
+                return Result()
+        async def flush(self):
+            self.flushed = True
+
+    db = MockDB()
+
+    async def mock_execute(source_code, language_id, stdin):
+        if stdin == "1":
+            return {"stdout": "true\n", "status": {"id": 3}}
+        elif stdin == "0":
+            return {"stdout": "true\n", "status": {"id": 3}}  # wrong
+        return {"stdout": "", "status": {"id": 3}}
+
+    from app.services import code_execution_service
+    monkeypatch.setattr(code_execution_service, "_execute_single_test_case", mock_execute)
+
+    class MockUser:
+        def __init__(self, uid, tid):
+            self.id = uid
+            self.tenant_id = tid
+            self.role = "candidate"
+
+    user = MockUser(candidate_id, tenant_id)
+
+    from app.schemas.code_submission import CodeRunRequest
+    payload = CodeRunRequest(source_code="print('true')", language_id=71, question_id=question_id)
+
+    resp = await run_code_public(request=None, attempt_id=attempt_id, payload=payload, user=user, db=db)
+
+    assert len(resp.cases) == 2
+    passed = [c.passed for c in resp.cases]
+    assert passed == [True, False]
+    assert db.flushed is False
+
+
+@pytest.mark.asyncio
+async def test_run_endpoint_ephemeral_no_submission_no_score_change(monkeypatch):
+    from app.core.limiter import limiter
+    limiter.enabled = False
+    from app.api.v1.code import run_code_public
+    from app.models.attempt import ExamAttempt
+    from app.models.question import Question, QuestionType
+    from uuid import uuid4
+    from datetime import datetime, timezone
+
+    attempt_id = uuid4()
+    question_id = uuid4()
+    tenant_id = uuid4()
+    candidate_id = uuid4()
+
+    attempt = ExamAttempt(
+        id=attempt_id,
+        exam_id=uuid4(),
+        candidate_id=candidate_id,
+        tenant_id=tenant_id,
+        status="started",
+        is_active=True,
+        started_at=datetime.now(timezone.utc),
+        answers={},
+    )
+    question = Question(
+        id=question_id,
+        exam_id=attempt.exam_id,
+        question_text="code q",
+        question_type=QuestionType.CODE.value,
+        correct_answer={
+            "test_cases": [
+                {"input": "1", "expected": True, "is_public": True},
+            ]
+        },
+        points=10,
+        order_index=0,
+        is_active=True,
+    )
+
+    class MockDB:
+        def __init__(self):
+            self.flushed = False
+            self.added = []
+        async def execute(self, stmt):
+            if "exam_attempts" in str(stmt).lower():
+                class Result:
+                    def scalar_one_or_none(self_inner):
+                        return attempt
+                return Result()
+            else:
+                class Result:
+                    def scalar_one_or_none(self_inner):
+                        return question
+                return Result()
+        async def flush(self):
+            self.flushed = True
+        def add(self, obj):
+            self.added.append(obj)
+
+    db = MockDB()
+
+    async def mock_execute(source_code, language_id, stdin):
+        return {"stdout": "true\n", "status": {"id": 3}}
+
+    from app.services import code_execution_service
+    monkeypatch.setattr(code_execution_service, "_execute_single_test_case", mock_execute)
+
+    class MockUser:
+        def __init__(self, uid, tid):
+            self.id = uid
+            self.tenant_id = tid
+            self.role = "candidate"
+
+    user = MockUser(candidate_id, tenant_id)
+
+    from app.schemas.code_submission import CodeRunRequest
+    payload = CodeRunRequest(source_code="print('true')", language_id=71, question_id=question_id)
+
+    # Capture original answers
+    original_answers = dict(attempt.answers)
+
+    resp = await run_code_public(request=None, attempt_id=attempt_id, payload=payload, user=user, db=db)
+
+    # No CodeSubmission added (run endpoint doesn't use db.add)
+    assert not any(isinstance(obj, __import__('app.models.code_submission', fromlist=['CodeSubmission']).CodeSubmission) for obj in db.added)
+    # No flush
+    assert db.flushed is False
+    # Attempt answers unchanged
+    assert attempt.answers == original_answers
+
+
+# ---- Integrity test: candidate question payload ----
+
+@pytest.mark.asyncio
+async def test_candidate_question_payload_integrity(monkeypatch):
+    from app.core.limiter import limiter
+    limiter.enabled = False
+    from app.api.v1.questions import list_questions
+    from app.models.question import Question, QuestionType
+    from app.models.user import User, UserRole
+    from uuid import uuid4
+    from datetime import datetime, timezone
+
+    exam_id = uuid4()
+    tenant_id = uuid4()
+    candidate_id = uuid4()
+
+    # Two questions: one code with mixed public/hidden, one non-code
+    code_q = Question(
+        id=uuid4(),
+        exam_id=exam_id,
+        question_text="code q",
+        question_type=QuestionType.CODE.value,
+        correct_answer={
+            "test_cases": [
+                {"input": "pub1", "expected": True, "is_public": True},
+                {"input": "hid1", "expected": False, "is_public": False},
+                {"input": "pub2", "expected": True, "is_public": True},
+            ]
+        },
+        points=5,
+        order_index=0,
+        is_active=True,
+        tenant_id=tenant_id,
+        created_at=datetime.now(timezone.utc),
+    )
+    mcq_q = Question(
+        id=uuid4(),
+        exam_id=exam_id,
+        question_text="mcq q",
+        question_type=QuestionType.MCQ.value,
+        options=[{"label":"A","text":"opt"}],
+        correct_answer="A",
+        points=2,
+        order_index=1,
+        is_active=True,
+        tenant_id=tenant_id,
+        created_at=datetime.now(timezone.utc),
+    )
+
+    # Mock question_service.list_questions to return our questions
+    import app.services.question_service as qs
+    async def mock_list_questions(db, exam_id_arg, tenant_id_arg):
+        assert exam_id_arg == exam_id
+        assert tenant_id_arg == tenant_id
+        return [code_q, mcq_q]
+    monkeypatch.setattr(qs, "list_questions", mock_list_questions)
+
+    # Mock current user candidate
+    class MockUser:
+        def __init__(self):
+            self.id = candidate_id
+            self.tenant_id = tenant_id
+            self.role = UserRole.CANDIDATE
+    user = MockUser()
+
+    # Call the real endpoint function
+    resp = await list_questions(exam_id=exam_id, user=user, db=None)
+
+    # resp is list of QuestionReadCandidate (pydantic models)
+    assert len(resp) == 2
+    # Find code question in response
+    code_resp = next(q for q in resp if q.question_type == "code")
+    mcq_resp = next(q for q in resp if q.question_type == "mcq")
+
+    # Serialize to dict (model_dump)
+    code_dump = code_resp.model_dump()
+    mcq_dump = mcq_resp.model_dump()
+
+    # No correct_answer key anywhere
+    assert "correct_answer" not in code_dump
+    assert "correct_answer" not in mcq_dump
+
+    # code question public_test_cases contains exactly two public cases
+    assert "public_test_cases" in code_dump
+    pub_cases = code_dump["public_test_cases"]
+    assert isinstance(pub_cases, list)
+    assert len(pub_cases) == 2
+    inputs = {c["input"] for c in pub_cases}
+    assert inputs == {"pub1", "pub2"}
+    # hidden case input must not appear anywhere in dumped payload
+    full_dump_str = str(code_dump) + str(mcq_dump)
+    assert "hid1" not in full_dump_str
+
+    # non-code question has no populated public_test_cases (should be None or empty)
+    assert mcq_dump.get("public_test_cases") in (None, [])

@@ -48,13 +48,24 @@ async def list_questions(
     """
     List questions for an exam.
     - Recruiters/Admins see full details including correct_answer.
-    - Candidates see questions without correct_answer.
+    - Candidates see questions without correct_answer; for code questions, public test cases are included.
     """
     questions = await question_service.list_questions(
         db, exam_id, user.tenant_id
     )
     if user.role == UserRole.CANDIDATE:
-        return [QuestionReadCandidate.model_validate(q) for q in questions]
+        result = []
+        for q in questions:
+            data = QuestionReadCandidate.model_validate(q).model_dump()
+            if q.question_type == "code" and q.correct_answer:
+                test_cases = q.correct_answer.get("test_cases") or []
+                public_cases = [
+                    {"input": tc.get("input"), "expected": tc.get("expected")}
+                    for tc in test_cases if tc.get("is_public")
+                ]
+                data["public_test_cases"] = public_cases
+            result.append(QuestionReadCandidate(**data))
+        return result
     return [QuestionRead.model_validate(q) for q in questions]
 
 

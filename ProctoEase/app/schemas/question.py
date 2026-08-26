@@ -44,7 +44,7 @@ class QuestionRead(BaseModel):
 
 
 class QuestionReadCandidate(BaseModel):
-    """Question view for candidates — hides correct_answer."""
+    """Question view for candidates — hides correct_answer, exposes public test cases for code questions."""
     id: uuid.UUID
     exam_id: uuid.UUID
     question_text: str
@@ -52,5 +52,6 @@ class QuestionReadCandidate(BaseModel):
     options: list[dict[str, Any]] | None
     points: int
     order_index: int
+    public_test_cases: list[dict[str, Any]] | None = None
 
     model_config = {"from_attributes": True}

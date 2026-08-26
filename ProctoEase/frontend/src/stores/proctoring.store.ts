@@ -1,26 +1,14 @@
 import { create } from "zustand"
 import { MAX_VIOLATIONS } from "@/lib/constants"
+import {
+  countsTowardGate,
+  type CanonicalViolationType,
+} from "@/lib/proctoring.catalog"
 
 export interface Violation {
   id: string
-  type:
-    | "tab_switch"
-    | "fullscreen_exit"
-    | "keyboard_block"
-    | "copy_paste"
-    | "right_click"
-    | "browser_devtools"
-    | "inactivity"
-    | "multiple_faces"
-    | "no_face"
-    | "audio_anomaly"
-    | "custom"
-    | "rapid_tab_switching"
-    | "suspicious_activity_burst"
-    | "bulk_paste_detected"
-    | "impossible_answer_speed"
-    | "periodic_check"
-    | "face_inconsistency"
+  /** Canonical type — see @/lib/proctoring.catalog (mirrors the backend catalog). */
+  type: CanonicalViolationType
   timestamp: string
   description: string
 }
@@ -60,6 +48,13 @@ export const useProctoringStore = create<ProctoringState>((set, get) => ({
       type,
       timestamp: new Date().toISOString(),
       description,
+    }
+    // Non-gating events (e.g. periodic_check) are kept in the local history but
+    // must not consume the termination budget or raise a candidate warning.
+    // The backend applies the same rule when it acks a violation_count.
+    if (!countsTowardGate(type)) {
+      set((s) => ({ violations: [...s.violations, violation] }))
+      return
     }
     set((s) => ({
       violations: [...s.violations, violation],

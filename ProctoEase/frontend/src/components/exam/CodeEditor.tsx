@@ -1,11 +1,13 @@
 import { useState } from "react"
 import { Editor } from "@monaco-editor/react"
-import { Play, Loader2, Maximize2, Minimize2 } from "lucide-react"
+import { Play, Loader2, Maximize2, Minimize2, CheckCircle2, XCircle } from "lucide-react"
 import {
   isTerminalCodeStatus,
   type CodeSubmission,
+  type CodeRunCaseResult,
 } from "@/api/code.api"
-import { useCodeLanguages, useRunCodeSubmission } from "@/hooks/useCodeExecution"
+import { useCodeLanguages, useRunCodeSubmission, useRunCodePublic } from "@/hooks/useCodeExecution"
+import type { PublicTestCase } from "@/api/question.api"
 import { toast } from "sonner"
 
 interface CodeEditorProps {
@@ -13,6 +15,7 @@ interface CodeEditorProps {
   questionId: string
   initialCode?: string
   onChange?: (code: string) => void
+  publicTestCases?: PublicTestCase[]
 }
 
 const PYTHON_STUB = `import sys
@@ -33,13 +36,16 @@ export default function CodeEditor({
   questionId,
   initialCode = "",
   onChange,
+  publicTestCases = [],
 }: CodeEditorProps) {
   const { data: languages = [], isError: languagesError } = useCodeLanguages()
   const runSubmission = useRunCodeSubmission()
+  const runPublic = useRunCodePublic()
   const [languageId, setLanguageId] = useState<number>(71) // Python default in Judge0
   const [code, setCode] = useState(() => initialCode || PYTHON_STUB)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [submission, setSubmission] = useState<CodeSubmission | null>(null)
+  const [publicRunResults, setPublicRunResults] = useState<CodeRunCaseResult[] | null>(null)
 
   const handleEditorChange = (value: string | undefined) => {
     const val = value || ""
@@ -72,6 +78,32 @@ export default function CodeEditor({
       setSubmission(result)
     } catch (err) {
       toast.error("Code execution failed")
+      console.error(err)
+    }
+  }
+
+  const handleRunPublic = async () => {
+    if (!code.trim()) {
+      toast.error("Code cannot be empty")
+      return
+    }
+    if (publicTestCases.length === 0) {
+      toast.info("No public sample cases for this question")
+      return
+    }
+    setPublicRunResults(null)
+    try {
+      const result = await runPublic.mutateAsync({
+        attemptId,
+        data: {
+          source_code: code,
+          language_id: languageId,
+          question_id: questionId,
+        },
+      })
+      setPublicRunResults(result.cases)
+    } catch (err) {
+      toast.error("Public test run failed")
       console.error(err)
     }
   }
@@ -147,8 +179,64 @@ export default function CodeEditor({
             )}
             Run Code
           </button>
+          {publicTestCases.length > 0 && (
+            <button
+              onClick={handleRunPublic}
+              disabled={runPublic.isPending || !code.trim()}
+              className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-secondary text-secondary-foreground text-sm font-bold rounded-lg hover:bg-secondary/80 disabled:opacity-50 transition"
+            >
+              {runPublic.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Play className="h-4 w-4" fill="currentColor" />
+              )}
+              Run Sample Tests
+            </button>
+          )}
         </div>
       </div>
+
+      {/* Public Sample Test Cases Panel */}
+      {publicTestCases.length > 0 && (
+        <div className="border-t border-border bg-muted/30 p-3">
+          <h4 className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wider">
+            Sample Test Cases (public)
+          </h4>
+          <div className="space-y-2 max-h-40 overflow-y-auto">
+            {publicTestCases.map((tc, idx) => {
+              const result = publicRunResults?.[idx]
+              return (
+                <div key={idx} className="text-xs font-mono bg-background border border-border rounded p-2">
+                  <div className="flex items-center justify-between">
+                    <span>Input:</span>
+                    {result && (
+                      <span className={result.passed ? "text-green-400" : "text-red-400"}>
+                        {result.passed ? <CheckCircle2 className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
+                      </span>
+                    )}
+                  </div>
+                  <pre className="whitespace-pre-wrap text-zinc-300 mt-1">{tc.input}</pre>
+                  <div className="flex items-center justify-between mt-1">
+                    <span>Expected:</span>
+                    {result && (
+                      <span className={result.passed ? "text-green-400" : "text-red-400"}>
+                        {result.passed ? <CheckCircle2 className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
+                      </span>
+                    )}
+                  </div>
+                  <pre className="whitespace-pre-wrap text-zinc-300 mt-1">{String(tc.expected)}</pre>
+                  {result && (
+                    <div className="mt-1">
+                      <span>Actual:</span>
+                      <pre className="whitespace-pre-wrap text-zinc-300 mt-1">{result.actual || "(no output)"}</pre>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Editor & Output Split */}
       <div className="flex flex-1 overflow-hidden flex-col md:flex-row">

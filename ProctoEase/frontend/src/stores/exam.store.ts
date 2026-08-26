@@ -1,5 +1,5 @@
 import { create } from "zustand"
-import type { BackendQuestion } from "@/api/question.api"
+import type { BackendQuestion, PublicTestCase } from "@/api/question.api"
 
 export interface Question {
   id: string
@@ -8,6 +8,8 @@ export interface Question {
   type: "mcq" | "multi_select" | "true_false" | "code"
   options?: { id: string; text: string }[]
   marks: number
+  /** Code questions only — public sample cases the candidate may run. */
+  public_test_cases?: PublicTestCase[]
 }
 
 export interface Answer {
@@ -34,6 +36,7 @@ interface ExamSessionState {
  * Map backend question format to frontend Question interface.
  * Backend: { question_text, question_type, options: [{label, text}], points, order_index }
  * Frontend: { text, type, options: [{id, text}], marks, question_number }
+ * public_test_cases passes through unchanged (candidate responses only).
  */
 export function mapBackendQuestions(raw: BackendQuestion[]): Question[] {
   return raw
@@ -48,6 +51,7 @@ export function mapBackendQuestions(raw: BackendQuestion[]): Question[] {
         text: opt.text,
       })),
       marks: q.points,
+      public_test_cases: q.public_test_cases ?? undefined,
     }))
 }
 

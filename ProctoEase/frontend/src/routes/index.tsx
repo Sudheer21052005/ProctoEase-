@@ -4,7 +4,6 @@ import AppLayout from "@/components/layout/AppLayout"
 import ProtectedRoute from "@/components/layout/ProtectedRoute"
 import RootRedirect from "@/components/layout/RootRedirect"
 
-import LandingPage from "@/pages/public/LandingPage"
 import LoginPage from "@/pages/public/LoginPage"
 import RegisterPage from "@/pages/public/RegisterPage"
 import CreateTenantPage from "@/pages/public/CreateTenantPage"
