@@ -21,7 +21,7 @@ from app.schemas.reporting import (
     CandidatePerformance,
     PaginatedResponse,
 )
-from app.services import reporting_service
+from app.services import reporting_service, integrity_report_service
 
 router = APIRouter(tags=["Reporting"])
 
@@ -211,5 +211,38 @@ async def export_dashboard_csv(
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
             "X-Row-Count": str(row_count),
+        },
+    )
+
+
+# ── Integrity Report PDF ───────────────────────────────────────────
+
+
+@router.get(
+    "/attempts/{attempt_id}/integrity-report/pdf",
+    summary="Download candidate integrity report as PDF",
+)
+async def download_integrity_report_pdf(
+    attempt_id: uuid.UUID,
+    user: User = Depends(require_role(UserRole.RECRUITER, UserRole.ADMIN)),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Generate and download a candidate integrity report PDF for a single exam attempt.
+    Includes risk summary, violation timeline with snapshots, MCQ and code results.
+    Recruiter / Admin only.
+    """
+    pdf_bytes = await integrity_report_service.generate_integrity_report_pdf(
+        db, attempt_id, user.tenant_id
+    )
+
+    filename = f"integrity_report_{attempt_id}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.pdf"
+
+    return StreamingResponse(
+        iter([pdf_bytes]),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(pdf_bytes)),
         },
     )
