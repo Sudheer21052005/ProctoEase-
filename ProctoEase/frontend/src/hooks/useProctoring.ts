@@ -6,8 +6,50 @@ import {
   loadMLModels,
   detectFacesAndGaze,
   detectObjects,
-  areModelsLoaded,
+  isFaceModelReady,
+  isObjectModelReady,
 } from "@/lib/ml-detection"
+import { startAudioMonitor, type AudioMonitorHandle } from "@/lib/audio-detection"
+import {
+  AUDIO_COOLDOWN_MS,
+  AUDIO_SUSTAINED_MS,
+  BULK_PASTE_THRESHOLD,
+  BURST_COOLDOWN_MS,
+  BURST_THRESHOLD,
+  BURST_WINDOW_MS,
+  CAPTURE_HEIGHT,
+  CAPTURE_WIDTH,
+  DEVTOOLS_CHECK_MS,
+  DEVTOOLS_COOLDOWN_MS,
+  DEVTOOLS_THRESHOLD,
+  ENABLE_AUDIO_DEBUG,
+  ENABLE_AUDIO_DETECTION,
+  ENABLE_FACE_DETECTOR_FALLBACK,
+  ENABLE_FACE_ML,
+  ENABLE_GAZE,
+  ENABLE_OBJECT_DETECTION,
+  FACE_COUNT_SMOOTHING_WINDOW,
+  FACE_SCAN_MS,
+  FACE_VIOLATION_COOLDOWN_MS,
+  GAZE_GRACE_MS,
+  HEARTBEAT_MS,
+  INACTIVITY_MS,
+  LIVE_WEBCAM_SELECTOR,
+  ML_FACE_SCAN_MS,
+  ML_OBJECT_SCAN_MS,
+  ML_SNAP_THROTTLE_MS,
+  MULTI_FACE_PERSIST_MS,
+  NO_FACE_PERSIST_MS,
+  OBJECT_SNAP_THROTTLE_MS,
+  PERIODIC_SNAPSHOT_MS,
+  PROCTORING_DEBUG_LOGS,
+  RAPID_TAB_COOLDOWN_MS,
+  RAPID_TAB_THRESHOLD,
+  RAPID_TAB_WINDOW_MS,
+  SNAPSHOT_JPEG_QUALITY,
+  SNAPSHOT_THROTTLE_MS,
+  TAB_SWITCH_DEDUPE_MS,
+} from "@/lib/proctoring.config"
 
 interface UseProctoringOptions {
   enabled: boolean
@@ -23,20 +65,6 @@ const DERIVED_TYPES = new Set<CanonicalViolationType>([
   "impossible_answer_speed",
 ])
 
-const INACTIVITY_MS = 90_000
-const DEVTOOLS_CHECK_MS = 2_000
-const DEVTOOLS_THRESHOLD = 160
-const SNAPSHOT_THROTTLE_MS = 7_000
-const PERIODIC_SNAPSHOT_MS = 75_000
-const FACE_SCAN_MS = 2_000
-const ML_FACE_SCAN_MS   = 500     // ML face+gaze check every 500ms
-const ML_OBJECT_SCAN_MS = 10_000  // Object detection every 10 seconds
-const GAZE_GRACE_MS     = 3_000   // Sustained gaze needed before event fires
-const ML_SNAP_THROTTLE_MS = 8_000 // Separate throttle for ML snapshot events
-const NO_FACE_PERSIST_MS = 2_000
-const MULTI_FACE_PERSIST_MS = 1_500
-const FACE_VIOLATION_COOLDOWN_MS = 4_000
-const LIVE_WEBCAM_SELECTOR = 'video[data-proctoring-webcam="true"]'
 const SNAPSHOT_EVENTS = new Set<CanonicalViolationType>([
   "no_face",
   "multiple_faces",
@@ -48,6 +76,13 @@ const SNAPSHOT_EVENTS = new Set<CanonicalViolationType>([
   "phone_detected",
   "unauthorized_object",
 ])
+
+/** Per-frame detector logging, off unless PROCTORING_DEBUG_LOGS is enabled. */
+function debugLog(label: string, detail?: unknown) {
+  if (!PROCTORING_DEBUG_LOGS) return
+  if (detail === undefined) console.log(label)
+  else console.log(label, detail)
+}
 
 /**
  * Build the WebSocket URL from the REST API base URL.
@@ -96,7 +131,9 @@ export function useProctoring({
   const mlObjectTimerRef  = useRef<ReturnType<typeof setInterval> | null>(null)
   const gazeAwayStartRef  = useRef<number | null>(null)
   const headTurnedStartRef = useRef<number | null>(null)
-  const mlModelsReadyRef  = useRef<boolean>(false)
+  const faceModelReadyRef = useRef<boolean>(false)
+  const objectModelReadyRef = useRef<boolean>(false)
+  const audioMonitorRef = useRef<AudioMonitorHandle | null>(null)
   const captureVideoRef = useRef<HTMLVideoElement | null>(null)
   const captureCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const captureStreamRef = useRef<MediaStream | null>(null)
@@ -115,7 +152,7 @@ export function useProctoring({
     if (captureStreamRef.current) return true
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 320, height: 240, facingMode: "user" },
+        video: { width: CAPTURE_WIDTH, height: CAPTURE_HEIGHT, facingMode: "user" },
         audio: false,
       })
       captureStreamRef.current = stream
@@ -149,9 +186,15 @@ export function useProctoring({
     const canvas = captureCanvasRef.current
     if (!video || !canvas) return undefined
 
-    console.log("Capture attempt - readyState:", video.readyState, "videoWidth:", video.videoWidth)
+    debugLog("Capture attempt - readyState:", {
+      readyState: video.readyState,
+      videoWidth: video.videoWidth,
+    })
     if (video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) {
-      console.warn("captureSnapshot: video not ready", video.readyState, video.videoWidth)
+      debugLog("captureSnapshot: video not ready", {
+        readyState: video.readyState,
+        videoWidth: video.videoWidth,
+      })
       return undefined
     }
 
@@ -164,7 +207,7 @@ export function useProctoring({
     if (!ctx) return undefined
 
     ctx.drawImage(video, 0, 0, width, height)
-    return canvas.toDataURL("image/jpeg", 0.7)
+    return canvas.toDataURL("image/jpeg", SNAPSHOT_JPEG_QUALITY)
   }, [ensureCaptureStream])
 
   const checkAndTrigger = useCallback(() => {
@@ -188,6 +231,12 @@ export function useProctoring({
     captureStreamRef.current = null
     captureVideoRef.current = null
     captureCanvasRef.current = null
+    // Releases the microphone too: this is the "exam is over, release capture
+    // devices" teardown (ExamScreen calls it at the top of handleSubmit), and
+    // leaving the mic open would keep the browser recording indicator lit
+    // after submission.
+    audioMonitorRef.current?.stop()
+    audioMonitorRef.current = null
   }, [])
 
   // ── Send violation event via WebSocket ──
@@ -213,8 +262,7 @@ export function useProctoring({
         ws.send(JSON.stringify(payload))
       } else {
         eventQueueRef.current.push(payload)
-        console.warn("[WS QUEUE] Event queued", { eventType })
-        console.warn("[WS ERROR] Event not sent", { eventType })
+        debugLog("[WS QUEUE] Event queued while socket was not open", { eventType })
       }
     },
     []
@@ -223,7 +271,7 @@ export function useProctoring({
   const getSmoothedFaceCount = useCallback((source: "ML" | "Fallback", rawFaceCount: number) => {
     const historyRef = source === "ML" ? mlFaceCountHistoryRef : fallbackFaceCountHistoryRef
     historyRef.current.push(rawFaceCount)
-    if (historyRef.current.length > 3) {
+    if (historyRef.current.length > FACE_COUNT_SMOOTHING_WINDOW) {
       historyRef.current.shift()
     }
 
@@ -249,7 +297,7 @@ export function useProctoring({
       snapshot = await captureSnapshot()
     }
     if (!snapshot) {
-      console.warn("[SNAPSHOT] fallback triggered")
+      debugLog("[SNAPSHOT] fallback triggered")
       snapshot = "fallback-empty"
     }
     return snapshot
@@ -269,7 +317,7 @@ export function useProctoring({
         const duration = now - noFaceStartRef.current
         const lastFired = faceViolationLastFiredRef.current.no_face
         if (duration >= NO_FACE_PERSIST_MS && now - lastFired >= FACE_VIOLATION_COOLDOWN_MS) {
-          console.log("[VIOLATION TRIGGERED]", {
+          debugLog("[VIOLATION TRIGGERED]", {
             type: "no_face",
             faceCount,
             duration,
@@ -304,7 +352,7 @@ export function useProctoring({
         const duration = now - multiFaceStartRef.current
         const lastFired = faceViolationLastFiredRef.current.multiple_faces
         if (duration >= MULTI_FACE_PERSIST_MS && now - lastFired >= FACE_VIOLATION_COOLDOWN_MS) {
-          console.log("[VIOLATION TRIGGERED]", {
+          debugLog("[VIOLATION TRIGGERED]", {
             type: "multiple_faces",
             faceCount,
             duration,
@@ -338,18 +386,20 @@ export function useProctoring({
   const maybeEmitDerived = useCallback(
     (eventTs: number) => {
       const recent = recentBaseEventsRef.current
-      const tabEvents = recent.filter((e) => e.type === "tab_switch" && eventTs - e.ts <= 10_000)
-      if (tabEvents.length > 3) {
+      const tabEvents = recent.filter(
+        (e) => e.type === "tab_switch" && eventTs - e.ts <= RAPID_TAB_WINDOW_MS
+      )
+      if (tabEvents.length > RAPID_TAB_THRESHOLD) {
         const last = lastDerivedRef.current.rapid_tab_switching || 0
-        if (eventTs - last >= 10_000) {
+        if (eventTs - last >= RAPID_TAB_COOLDOWN_MS) {
           lastDerivedRef.current.rapid_tab_switching = eventTs
           addViolation("rapid_tab_switching", "Rapid tab switching pattern detected")
           sendEvent(
             "rapid_tab_switching",
             {
-              description: "More than 3 tab switches within 10 seconds",
+              description: `More than ${RAPID_TAB_THRESHOLD} tab switches within ${RAPID_TAB_WINDOW_MS / 1000} seconds`,
               count: tabEvents.length,
-              window_ms: 10000,
+              window_ms: RAPID_TAB_WINDOW_MS,
             },
             2,
             new Date(eventTs).toISOString()
@@ -357,18 +407,18 @@ export function useProctoring({
         }
       }
 
-      const burstEvents = recent.filter((e) => eventTs - e.ts <= 30_000)
-      if (burstEvents.length > 5) {
+      const burstEvents = recent.filter((e) => eventTs - e.ts <= BURST_WINDOW_MS)
+      if (burstEvents.length > BURST_THRESHOLD) {
         const last = lastDerivedRef.current.suspicious_activity_burst || 0
-        if (eventTs - last >= 15_000) {
+        if (eventTs - last >= BURST_COOLDOWN_MS) {
           lastDerivedRef.current.suspicious_activity_burst = eventTs
           addViolation("suspicious_activity_burst", "Suspicious burst of violations detected")
           sendEvent(
             "suspicious_activity_burst",
             {
-              description: "More than 5 violations within 30 seconds",
+              description: `More than ${BURST_THRESHOLD} violations within ${BURST_WINDOW_MS / 1000} seconds`,
               count: burstEvents.length,
-              window_ms: 30000,
+              window_ms: BURST_WINDOW_MS,
             },
             2,
             new Date(eventTs).toISOString()
@@ -385,7 +435,7 @@ export function useProctoring({
 
       recentBaseEventsRef.current.push({ type: eventType, ts: eventTs })
       recentBaseEventsRef.current = recentBaseEventsRef.current.filter(
-        (e) => eventTs - e.ts <= 30_000
+        (e) => eventTs - e.ts <= BURST_WINDOW_MS
       )
       maybeEmitDerived(eventTs)
     },
@@ -401,6 +451,12 @@ export function useProctoring({
       snapshotBase64?: string
     ) => {
       const ts = Date.now()
+      // Catch-all for `audio_anomaly` regardless of caller, with a stack trace
+      // so an unexpected emitter is identifiable. Gated by ENABLE_AUDIO_DEBUG.
+      if (ENABLE_AUDIO_DEBUG && eventType === "audio_anomaly") {
+        console.log(`[AUDIO DEBUG] reportViolation received audio_anomaly timestamp=${ts}`)
+        console.trace("[AUDIO DEBUG] audio_anomaly call site")
+      }
       addViolation(eventType, description)
       sendEvent(
         eventType,
@@ -417,6 +473,14 @@ export function useProctoring({
     },
     [addViolation, sendEvent, recordBaseEvent, checkAndTrigger]
   )
+
+  // Stable handle onto the latest reportViolation. Long-lived resources (the
+  // microphone) must not be torn down and re-acquired just because the
+  // callback identity changed on a re-render.
+  const reportViolationRef = useRef(reportViolation)
+  useEffect(() => {
+    reportViolationRef.current = reportViolation
+  }, [reportViolation])
 
   // ── WebSocket connection ──
   useEffect(() => {
@@ -445,12 +509,12 @@ export function useProctoring({
         ws.send(JSON.stringify(queued))
       }
 
-      // Start heartbeat every 30s
+      // Start heartbeat
       heartbeatRef.current = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: "heartbeat" }))
         }
-      }, 30_000)
+      }, HEARTBEAT_MS)
     }
 
     ws.onmessage = (event) => {
@@ -543,8 +607,8 @@ export function useProctoring({
     }
 
     const handleBlur = async () => {
-      // Deduplicate with visibilitychange — skip if fired within 500ms
-      if (Date.now() - lastTabViolationRef.current < 500) return
+      // Deduplicate with visibilitychange
+      if (Date.now() - lastTabViolationRef.current < TAB_SWITCH_DEDUPE_MS) return
 
       const now = Date.now()
       let snapshot: string | undefined
@@ -667,14 +731,14 @@ export function useProctoring({
         action: "paste",
         length: text.length,
       })
-      if (text.length > 50) {
+      if (text.length > BULK_PASTE_THRESHOLD) {
         addViolation("bulk_paste_detected", "Large paste payload detected")
         sendEvent(
           "bulk_paste_detected",
           {
-            description: "Paste content exceeded 50 characters",
+            description: `Paste content exceeded ${BULK_PASTE_THRESHOLD} characters`,
             length: text.length,
-            threshold: 50,
+            threshold: BULK_PASTE_THRESHOLD,
           },
           2
         )
@@ -744,7 +808,7 @@ export function useProctoring({
 
       if (open && !devtoolsWasOpenRef.current) {
         const last = lastDerivedRef.current.browser_devtools || 0
-        if (now - last > 15_000) {
+        if (now - last > DEVTOOLS_COOLDOWN_MS) {
           lastDerivedRef.current.browser_devtools = now
           reportViolation("browser_devtools", "Developer tools likely open", 2, {
             width_diff: widthDiff,
@@ -788,32 +852,52 @@ export function useProctoring({
   }, [enabled, captureSnapshot, sendEvent])
 
   // ── Load ML models on exam start ─────────────────────────────────────────
+  // The two models are tracked separately: COCO-SSD weights are fetched from
+  // Google storage, so an object-model failure must not disable face detection.
   useEffect(() => {
     if (!enabled) return
-    if (areModelsLoaded()) {
-      mlModelsReadyRef.current = true
-      console.log("[ProctoEase] ML face detection active")
+    if (!ENABLE_FACE_ML && !ENABLE_OBJECT_DETECTION) return
+
+    faceModelReadyRef.current = isFaceModelReady()
+    objectModelReadyRef.current = isObjectModelReady()
+    if (
+      (faceModelReadyRef.current || !ENABLE_FACE_ML) &&
+      (objectModelReadyRef.current || !ENABLE_OBJECT_DETECTION)
+    ) {
       return
     }
-    loadMLModels().then((success) => {
-      mlModelsReadyRef.current = success || areModelsLoaded()
-      if (success) {
+
+    let cancelled = false
+    loadMLModels().then((report) => {
+      if (cancelled) return
+      faceModelReadyRef.current = report.face
+      objectModelReadyRef.current = report.object
+
+      if (report.face) {
         console.log("[ProctoEase] ML face detection active")
-      } else {
-        console.warn("[ProctoEase] ML load failed — browser FaceDetector fallback active")
+      } else if (ENABLE_FACE_ML) {
+        console.warn("[ProctoEase] ML face model unavailable — browser FaceDetector fallback active")
+      }
+      if (!report.object && ENABLE_OBJECT_DETECTION) {
+        console.warn("[ProctoEase] Object detection unavailable — phone/object checks disabled")
       }
     })
+
+    return () => {
+      cancelled = true
+    }
   }, [enabled])
 
   // ── ML Face + Gaze Detection ──────────────────────────────────────────────
   useEffect(() => {
     if (!enabled) return
+    if (!ENABLE_FACE_ML) return
 
     mlFaceTimerRef.current = setInterval(async () => {
-      if (!mlModelsReadyRef.current && areModelsLoaded()) {
-        mlModelsReadyRef.current = true
+      if (!faceModelReadyRef.current && isFaceModelReady()) {
+        faceModelReadyRef.current = true
       }
-      if (!mlModelsReadyRef.current || !areModelsLoaded()) return
+      if (!faceModelReadyRef.current || !isFaceModelReady()) return
 
       const ok = await ensureCaptureStream()
       if (!ok) return
@@ -823,9 +907,9 @@ export function useProctoring({
       if (!video || video.readyState !== 4 || video.videoWidth <= 0 || !hasStream) return
 
       const result = detectFacesAndGaze(video)
-      if (result.faceCount === -1) return   // models not ready
+      if (result.faceCount === -1) return   // model not ready
 
-      console.log("[FACE DETECTION]", {
+      debugLog("[FACE DETECTION]", {
         source: "ML",
         faceCount: result.faceCount,
         timestamp: Date.now()
@@ -841,7 +925,7 @@ export function useProctoring({
       }
 
       // ── Single face — check gaze ───────────────────────────────────────
-      if (result.faceCount === 1) {
+      if (ENABLE_GAZE && result.faceCount === 1) {
 
         // HEAD TURNED (left/right)
         if (result.headTurned) {
@@ -916,12 +1000,13 @@ export function useProctoring({
   // ── Object Detection (phone / unauthorized items) ────────────────────────
   useEffect(() => {
     if (!enabled) return
+    if (!ENABLE_OBJECT_DETECTION) return
 
     mlObjectTimerRef.current = setInterval(async () => {
-      if (!mlModelsReadyRef.current && areModelsLoaded()) {
-        mlModelsReadyRef.current = true
+      if (!objectModelReadyRef.current && isObjectModelReady()) {
+        objectModelReadyRef.current = true
       }
-      if (!mlModelsReadyRef.current || !areModelsLoaded()) return
+      if (!objectModelReadyRef.current || !isObjectModelReady()) return
 
       const ok = await ensureCaptureStream()
       if (!ok) return
@@ -936,7 +1021,7 @@ export function useProctoring({
       // Phone detected
       if (result.phoneDetected) {
         const lastSnap = lastSnapshotByTypeRef.current["phone_detected"] || 0
-        if (now - lastSnap >= ML_SNAP_THROTTLE_MS * 2) {
+        if (now - lastSnap >= OBJECT_SNAP_THROTTLE_MS) {
           const snapshot = await captureSnapshot()
           lastSnapshotByTypeRef.current["phone_detected"] = now
           addViolation("phone_detected", "Mobile phone detected in camera view")
@@ -958,7 +1043,7 @@ export function useProctoring({
       // Other unauthorized object (only if no phone — avoid double-firing)
       if (result.unauthorizedObjectDetected && !result.phoneDetected) {
         const lastSnap = lastSnapshotByTypeRef.current["unauthorized_object"] || 0
-        if (now - lastSnap >= ML_SNAP_THROTTLE_MS * 2) {
+        if (now - lastSnap >= OBJECT_SNAP_THROTTLE_MS) {
           const snapshot = await captureSnapshot()
           lastSnapshotByTypeRef.current["unauthorized_object"] = now
           addViolation(
@@ -991,10 +1076,27 @@ export function useProctoring({
   }, [enabled, ensureCaptureStream, captureSnapshot, addViolation, sendEvent, checkAndTrigger])
 
   // ── Basic face consistency check (FaceDetector API when available) ──
+  //
+  // This is a FALLBACK for the MediaPipe path, not a second opinion. Both
+  // paths call processFacePresence(), which writes the same persistence and
+  // cooldown refs (noFaceStartRef, multiFaceStartRef, faceViolationLastFiredRef).
+  // Running them together lets the 500ms ML tick clear a timer the 2000ms
+  // fallback tick had just started, so whenever the two disagree the
+  // fallback's persistence window never accumulates and real no_face /
+  // multiple_faces events are delayed or dropped.
+  //
+  // The mutual exclusion was always the intent — the loader logs "browser
+  // FaceDetector fallback active" only on ML failure — but it was never
+  // enforced. It is enforced here, inside the tick rather than in the effect
+  // deps, so the handover happens as soon as the async model load resolves.
   useEffect(() => {
     if (!enabled) return
+    if (!ENABLE_FACE_DETECTOR_FALLBACK) return
 
     faceTimerRef.current = setInterval(async () => {
+      // Yield to MediaPipe whenever it is usable.
+      if (faceModelReadyRef.current || isFaceModelReady()) return
+
       const detectorCtor = (window as unknown as { FaceDetector?: new () => { detect: (input: CanvasImageSource) => Promise<Array<unknown>> } }).FaceDetector
       if (!detectorCtor) return
 
@@ -1010,7 +1112,7 @@ export function useProctoring({
         const faces = await detector.detect(video)
         const count = faces.length
 
-        console.log("[FACE DETECTION]", {
+        debugLog("[FACE DETECTION]", {
           source: "Fallback",
           faceCount: count,
           timestamp: Date.now()
@@ -1049,6 +1151,80 @@ export function useProctoring({
       }
     }
   }, [enabled, ensureCaptureStream, addViolation, sendEvent, checkAndTrigger, processFacePresence])
+
+  // ── Sustained voice / audio activity detection (microphone level) ─────────
+  //
+  // Energy-only: no speech-to-text, no recording, nothing leaves the browser.
+  // This detects sustained audio ACTIVITY relative to the measured room noise
+  // floor — it cannot tell a voice from any other sustained sound of similar
+  // loudness. Events go through the same reportViolation() path as every other
+  // detector, so `audio_anomaly` reaches the canonical catalog, the risk
+  // weighting and the WebSocket persistence pipeline with no separate mechanism.
+  //
+  // Deps are [enabled] only, deliberately: getUserMedia must run exactly once
+  // per exam. reportViolation is read through a ref for that reason.
+  useEffect(() => {
+    if (!enabled) return
+    if (!ENABLE_AUDIO_DETECTION) return
+
+    let cancelled = false
+
+    void startAudioMonitor({
+      onAnomaly: (details) => {
+        // Marks the hand-off from the detector into the shared violation
+        // pipeline. If an ANOMALY FIRED line appears without this one, the hook
+        // dropped it; if `audio_anomaly` shows in the UI without either line,
+        // something else emitted that type.
+        if (ENABLE_AUDIO_DEBUG) {
+          console.log(
+            `[AUDIO DEBUG] -> reportViolation("audio_anomaly")` +
+              ` peak=${details.peakLevel.toFixed(4)}` +
+              ` voicedMs=${details.durationMs}` +
+              ` activityRatio=${details.activityRatio.toFixed(2)} timestamp=${Date.now()}`
+          )
+        }
+        reportViolationRef.current(
+          "audio_anomaly",
+          "Sustained voice or background audio activity detected",
+          2,
+          {
+            peak_level: Number(details.peakLevel.toFixed(4)),
+            average_level: Number(details.averageLevel.toFixed(4)),
+            activity_ratio: Number(details.activityRatio.toFixed(2)),
+            duration_ms: details.durationMs,
+            segment_ms: details.segmentMs,
+            noise_floor: Number(details.noiseFloor.toFixed(5)),
+            enter_threshold: Number(details.threshold.toFixed(4)),
+            exit_threshold: Number(details.exitThreshold.toFixed(4)),
+            sustained_ms: AUDIO_SUSTAINED_MS,
+            cooldown_ms: AUDIO_COOLDOWN_MS,
+          }
+        )
+      },
+    }).then((result) => {
+      // The effect may have been cleaned up while getUserMedia was pending.
+      if (cancelled) {
+        if (result.ok) result.handle.stop()
+        return
+      }
+      if (result.ok) {
+        audioMonitorRef.current = result.handle
+        console.log("[ProctoEase] Audio monitoring active")
+      } else {
+        // Denied or unavailable microphone is non-fatal: every other detector
+        // keeps running and the exam is unaffected.
+        console.warn(
+          `[ProctoEase] Audio monitoring unavailable (${result.reason}) — audio_anomaly disabled`
+        )
+      }
+    })
+
+    return () => {
+      cancelled = true
+      audioMonitorRef.current?.stop()
+      audioMonitorRef.current = null
+    }
+  }, [enabled])
 
   useEffect(() => {
     if (!enabled) return

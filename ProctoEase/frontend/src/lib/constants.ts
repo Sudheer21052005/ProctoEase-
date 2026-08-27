@@ -12,4 +12,9 @@ export const ATTEMPT_STATUSES = {
   EVALUATED: "evaluated",
 } as const
 
-export const MAX_VIOLATIONS = 12
+/**
+ * Re-exported for backwards compatibility. The value now lives in
+ * `lib/proctoring.config.ts` alongside every other proctoring tunable —
+ * change it there, not here.
+ */
+export { MAX_VIOLATIONS } from "@/lib/proctoring.config"
