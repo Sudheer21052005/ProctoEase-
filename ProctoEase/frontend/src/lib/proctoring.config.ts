@@ -26,11 +26,41 @@
 export const ENABLE_FACE_ML = true
 
 /**
- * Gaze + head-pose events (`gaze_away`, `head_turned`).
+ * Master switch for head-orientation events (`gaze_away`, `head_turned`).
  * Face counting is unaffected — set this to `false` to keep presence
- * detection while suppressing the noisier orientation events.
+ * detection while suppressing all orientation events.
+ *
+ * NAMING HONESTY: `gaze_away` is a HEAD-PITCH estimate derived from facial
+ * landmarks (1 nose tip, 10 forehead, 152 chin, 33/263 outer eye corners).
+ * It is NOT eye tracking — MediaPipe's iris landmarks (468-477) are never
+ * requested. The public violation type keeps its historical name because it
+ * is mirrored in the backend catalog.
  */
 export const ENABLE_GAZE = true
+
+/**
+ * `head_turned` (yaw). Ships ON: the yaw metric is validated against a real
+ * Chrome session (resting |yawRatio| <= 0.131, weakest deliberate turn
+ * 0.322 — a clean gap; see HEAD_YAW_RATIO_THRESHOLD).
+ *
+ * Gates violation EMISSION only — measurement and [ML DEBUG] logging always
+ * run so the detector stays observable while disabled.
+ */
+export const ENABLE_GAZE_YAW = true
+
+/**
+ * `gaze_away` (head pitch). Ships OFF: the previous pitch metric could not
+ * separate deliberate look-aways from normal posture drift (measured resting
+ * drift max 0.113 vs genuine signal max 0.102 — overlapping classes) and
+ * produced 7 false positives in an otherwise clean exam.
+ *
+ * Gates violation EMISSION only — measurement, calibration and [ML DEBUG]
+ * logging always run, so a Chrome session under this flag still collects the
+ * resting/action fhDev distributions needed to set
+ * GAZE_FH_DEVIATION_THRESHOLD. If the data separates cleanly, enabling the
+ * detector is a threshold value plus this flag — no rework.
+ */
+export const ENABLE_GAZE_PITCH = false
 
 /** COCO-SSD object path: phone_detected / unauthorized_object. */
 export const ENABLE_OBJECT_DETECTION = true
@@ -46,9 +76,10 @@ export const ENABLE_AUDIO_DETECTION = true
 export const ENABLE_FACE_DETECTOR_FALLBACK = true
 
 /**
- * Per-frame detector console logging. Off by default: the face loop runs at
- * 2 Hz, so leaving it on floods DevTools and makes real errors invisible
- * during a demo. Flip to `true` when debugging detection.
+ * Per-frame detector console logging. Currently `true` to collect data for
+ * the Chrome calibration test; MUST be restored to `false` before any
+ * commit: the face loop runs at 2 Hz and floods DevTools, making real
+ * errors invisible during a demo.
  */
 export const PROCTORING_DEBUG_LOGS = false
 
@@ -90,8 +121,6 @@ export const MAX_VIOLATIONS = 12
 
 /** MediaPipe face + gaze inference cadence. */
 export const ML_FACE_SCAN_MS = 500
-/** COCO-SSD object inference cadence (much heavier than the face model). */
-export const ML_OBJECT_SCAN_MS = 10_000
 /** Browser `FaceDetector` fallback cadence. */
 export const FACE_SCAN_MS = 2_000
 /**
@@ -169,13 +198,97 @@ export const DEVTOOLS_THRESHOLD = 160
  */
 export const FACE_COUNT_SMOOTHING_WINDOW = 3
 
-/** Normalised head yaw beyond which the head counts as turned left/right. */
-export const GAZE_YAW_THRESHOLD = 0.25
-/** Normalised head pitch beyond which gaze counts as up/down. */
-export const GAZE_PITCH_THRESHOLD = 0.22
+// ─────────────────────────────────────────────────────────────────────────────
+// Head orientation — yaw (head_turned) and head pitch (gaze_away)
+//
+// Both metrics are ratios of landmark distances, so they are scale-invariant
+// and threshold units are dimensionless fractions. The legacy
+// GAZE_YAW_THRESHOLD / GAZE_PITCH_THRESHOLD / GAZE_PITCH_NEUTRAL_RATIO /
+// GAZE_PITCH_RATIO_THRESHOLD constants were removed: the first two were
+// imported nowhere, and the last two encoded the guessed-neutral pitch
+// design that was replaced by per-session calibration.
+// ─────────────────────────────────────────────────────────────────────────────
 
-/** Minimum COCO-SSD score for an object to be reported. */
-export const OBJECT_CONFIDENCE_THRESHOLD = 0.6
+/**
+ * |yawRatio| above which the head counts as turned left/right.
+ * MEASURED: a real Chrome session showed resting |yawRatio| <= 0.131 and
+ * the weakest deliberate turn at 0.322; 0.25 sits inside that empty gap,
+ * biased toward specificity — correct for proctoring, where a false
+ * accusation costs more than a missed glance. (Raised from a provisional
+ * 0.22 to add margin over the resting tail.)
+ */
+export const HEAD_YAW_RATIO_THRESHOLD = 0.25
+
+/**
+ * Relative deviation of the vertical-foreshortening ratio (faceHeight /
+ * interocular) from the per-session calibrated baseline at which gaze_away
+ * fires. Dimensionless fraction: 0.12 = a 12% projected-height change vs
+ * baseline (a ~30 degree head pitch). PROVISIONAL — replace with a
+ * Chrome-measured value using the threshold rule
+ * (max(restingMax * 1.5, (restingMax + actionMin) / 2), strictly below
+ * actionMin) before flipping ENABLE_GAZE_PITCH.
+ */
+export const GAZE_FH_DEVIATION_THRESHOLD = 0.12
+
+/**
+ * |yawRatio| at or above which the pitch decision is suppressed. The
+ * foreshortening ratio is confounded by yaw, so head pitch is only
+ * evaluated while the head is roughly frontal. Ratio units; provisional.
+ */
+export const GAZE_PITCH_MAX_YAW = 0.15
+
+/**
+ * Calibration window for the per-session pitch baseline, in ms. At the
+ * 500 ms face cadence this collects ~10 samples. Mirrors AUDIO_CALIBRATION_MS.
+ */
+export const GAZE_CALIBRATION_MS = 5_000
+
+/**
+ * Minimum finite samples required before the baseline is accepted. Until
+ * this many are collected, pitch detection is DISARMED (gazeAway stays
+ * false) — exactly like the audio calibration window.
+ */
+export const GAZE_CALIBRATION_MIN_SAMPLES = 8
+
+/**
+ * Median-of-N smoothing window applied to yawRatio and fhDeviation before
+ * thresholding, in frames. 3 kills isolated single-frame spikes at their
+ * source (mirrors FACE_COUNT_SMOOTHING_WINDOW).
+ */
+export const GAZE_RATIO_SMOOTHING_WINDOW = 3
+
+/**
+ * Consecutive above-threshold frames required to ARM a grace timer, in
+ * frames. A single above-threshold frame cannot start the sustain window.
+ */
+export const GAZE_ARM_FRAMES = 2
+
+/**
+ * Sustained-above time required before gaze_away fires, in ms. Longer than
+ * the yaw grace: pitch is the noisier signal and warrants more evidence.
+ */
+export const GAZE_PITCH_GRACE_MS = 4_000
+
+/**
+ * Consecutive below-threshold frames tolerated before the pitch grace timer
+ * clears, in frames. Stricter than the yaw tolerance.
+ */
+export const GAZE_PITCH_TOLERANCE_FRAMES = 1
+
+/**
+ * Consecutive below-threshold frames tolerated before the yaw grace timer
+ * clears, in frames.
+ */
+export const GAZE_JITTER_TOLERANCE_FRAMES = 2
+
+/** Minimum COCO-SSD score for an object to be reported. Lowered from 0.6 to 0.45 to improve recall. */
+export const OBJECT_CONFIDENCE_THRESHOLD = 0.45
+
+/** Number of consecutive positive object ticks required before emitting an event. */
+export const OBJECT_CONSECUTIVE_TICKS = 2
+
+/** COCO-SSD object inference cadence (reduced from 10s to 2.5s for faster response). */
+export const ML_OBJECT_SCAN_MS = 2500
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Voice / audio activity detection (adaptive energy VAD)
@@ -304,17 +417,12 @@ export const FACE_LANDMARKER_DELEGATE = "GPU" as const
  */
 export const COCO_SSD_BASE = "lite_mobilenet_v2" as const
 
-/** COCO-SSD labels treated as a phone. */
+/** COCO-SSD labels treated as a phone. "remote" is included because COCO-SSD often labels a hand-held phone as "remote". */
 export const PHONE_CLASSES = ["cell phone", "remote"] as const
-/** COCO-SSD labels treated as unauthorized material. */
+/** COCO-SSD labels treated as unauthorized material. Trimmed to items that are clearly unauthorized in an exam setting. */
 export const UNAUTHORIZED_CLASSES = [
   "book",
   "laptop",
-  "keyboard",
-  "mouse",
-  "remote",
-  "tv",
-  "monitor",
 ] as const
 
 // ─────────────────────────────────────────────────────────────────────────────

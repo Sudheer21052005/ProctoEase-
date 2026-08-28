@@ -20,7 +20,7 @@
 
 import { FaceLandmarker, type FaceLandmarkerResult } from "@mediapipe/tasks-vision"
 import * as cocoSsd from "@tensorflow-models/coco-ssd"
-import "@tensorflow/tfjs"
+import * as tf from "@tensorflow/tfjs"
 
 // Emitted as same-origin asset URLs by Vite. The SIMD build is used: WASM SIMD
 // is enabled by default in every browser that can run this exam UI.
@@ -37,24 +37,33 @@ import {
   FACE_LANDMARKER_MIN_PRESENCE_CONFIDENCE,
   FACE_LANDMARKER_MIN_TRACKING_CONFIDENCE,
   FACE_LANDMARKER_MODEL_URL,
-  GAZE_PITCH_THRESHOLD,
-  GAZE_YAW_THRESHOLD,
-  OBJECT_CONFIDENCE_THRESHOLD,
-  PHONE_CLASSES,
-  UNAUTHORIZED_CLASSES,
+  PROCTORING_DEBUG_LOGS,
 } from "@/lib/proctoring.config"
+import {
+  evaluateFaceOrientation,
+  classifyObjectPredictions,
+  type FaceOrientationResult,
+} from "@/lib/ml-geometry"
 
 export interface FaceDetectionResult {
   faceCount: number       // -1 = model not ready
-  gazeAway: boolean       // looking up or down
-  headTurned: boolean     // looking left or right
+  gazeAway: boolean       // raw per-frame head-pitch decision (pre-smoothing)
+  headTurned: boolean     // raw per-frame yaw decision (pre-smoothing)
   confidence: number
+  /**
+   * Raw orientation metrics when a face was evaluated. Temporal logic
+   * (calibration, smoothing, sustain) lives in the hook; these booleans are
+   * the per-frame raw decisions only.
+   */
+  orientation?: FaceOrientationResult
 }
 
 export interface ObjectDetectionResult {
   phoneDetected: boolean
   unauthorizedObjectDetected: boolean
   detectedObjects: string[]
+  /** Measured inference wall time of this tick, ms. */
+  inferMs: number
 }
 
 /** Which detectors actually came up. Reported so the UI can degrade honestly. */
@@ -102,6 +111,11 @@ async function loadObjectModel(): Promise<boolean> {
   try {
     objectDetector = await cocoSsd.load({ base: COCO_SSD_BASE })
     objectModelReady = true
+    if (PROCTORING_DEBUG_LOGS) {
+      // One-shot: which TFJS backend actually came up, so per-tick inferMs
+      // can be attributed to warm WebGL vs slow CPU.
+      console.log(`[ML DEBUG] object backend=${tf.getBackend()}`)
+    }
     return true
   } catch (error) {
     objectDetector = null
@@ -180,7 +194,7 @@ export function detectFacesAndGaze(
       return { faceCount: 0, gazeAway: false, headTurned: false, confidence: 1 }
     }
 
-    // Analyze first face landmarks for gaze direction
+    // Analyze first face landmarks for head orientation.
     // MediaPipe provides 468 landmarks per face
     // Key points used:
     //   1  = nose tip
@@ -189,56 +203,65 @@ export function detectFacesAndGaze(
     // 152  = chin bottom
     //  10  = forehead center
     const lm = result.faceLandmarks[0]
-    const noseTip  = lm[1]
-    const leftEye  = lm[33]
-    const rightEye = lm[263]
-    const chin     = lm[152]
-    const forehead = lm[10]
 
-    if (!noseTip || !leftEye || !rightEye || !chin || !forehead) {
-      return { faceCount, gazeAway: false, headTurned: false, confidence: 0.5 }
+    // Convert MediaPipe landmarks to our Landmark type
+    const landmarks: Array<{ x: number; y: number }> = lm.map((pt) => ({ x: pt.x, y: pt.y }))
+
+    // Called WITHOUT a baseline: the per-session pitch baseline is hook
+    // state, and the hook derives decisions from the smoothed raw metrics.
+    // The full [ML DEBUG] gaze line (with smoothing/calibration context) is
+    // logged by the hook, not here.
+    const orientation = evaluateFaceOrientation(landmarks)
+
+    if (!orientation.valid) {
+      return { faceCount, gazeAway: false, headTurned: false, confidence: 0.5, orientation }
     }
 
-    // Horizontal turn: compare nose x vs midpoint between eyes
-    const eyeMidX    = (leftEye.x + rightEye.x) / 2
-    const yawOffset  = Math.abs(noseTip.x - eyeMidX)
-    const headTurned = yawOffset > GAZE_YAW_THRESHOLD
-
-    // Vertical gaze: compare nose y vs midpoint between forehead and chin
-    const faceMidY   = (forehead.y + chin.y) / 2
-    const pitchOffset = Math.abs(noseTip.y - faceMidY)
-    const gazeAway   = pitchOffset > GAZE_PITCH_THRESHOLD
-
-    return { faceCount, gazeAway, headTurned, confidence: 0.9 }
-  } catch {
+    return {
+      faceCount,
+      gazeAway: orientation.gazeAway,
+      headTurned: orientation.headTurned,
+      confidence: 0.9,
+      orientation,
+    }
+  } catch (error) {
+    // A per-frame inference throw (WASM/WebGL context loss, a bad frame) is
+    // non-fatal — the loop treats -1 as "model not ready" and simply skips —
+    // but silently swallowing it hid why face detection could go quiet. Gated
+    // by the debug flag so a normal exam stays console-clean.
+    if (PROCTORING_DEBUG_LOGS) console.error("[ML DEBUG] face inference failed", error)
     return { faceCount: -1, gazeAway: false, headTurned: false, confidence: 0 }
   }
 }
 
 export async function detectObjects(
-  video: HTMLVideoElement
+  video: HTMLVideoElement,
+  tick?: number
 ): Promise<ObjectDetectionResult> {
   if (!objectDetector || !objectModelReady) {
-    return { phoneDetected: false, unauthorizedObjectDetected: false, detectedObjects: [] }
+    return { phoneDetected: false, unauthorizedObjectDetected: false, detectedObjects: [], inferMs: 0 }
   }
 
+  const startMs = performance.now()
   try {
     const predictions = await objectDetector.detect(video)
+    const inferMs = performance.now() - startMs
 
-    const detectedObjects = predictions
-      .filter((p) => p.score > OBJECT_CONFIDENCE_THRESHOLD)
-      .map((p) => p.class.toLowerCase())
+    if (PROCTORING_DEBUG_LOGS) {
+      const tag = tick === undefined ? "" : ` tick=${tick}`
+      for (const p of predictions) {
+        console.log(`[ML DEBUG] object${tag} pred class=${p.class} score=${p.score.toFixed(3)}`)
+      }
+    }
 
-    const phoneDetected = detectedObjects.some((obj) =>
-      PHONE_CLASSES.some((c) => obj.includes(c))
-    )
-
-    const unauthorizedObjectDetected = detectedObjects.some((obj) =>
-      UNAUTHORIZED_CLASSES.some((c) => obj.includes(c))
-    )
-
-    return { phoneDetected, unauthorizedObjectDetected, detectedObjects }
-  } catch {
-    return { phoneDetected: false, unauthorizedObjectDetected: false, detectedObjects: [] }
+    // The per-tick result line (with tick + inferMs) is logged by the hook,
+    // which owns the tick counter and the consecutive-tick state.
+    return { ...classifyObjectPredictions(predictions), inferMs }
+  } catch (error) {
+    // Same rationale as the face path: an object-inference throw is isolated
+    // (the tick just yields "nothing detected"), but it must be observable so
+    // a dead object detector can be told apart from a genuinely empty frame.
+    if (PROCTORING_DEBUG_LOGS) console.error("[ML DEBUG] object inference failed", error)
+    return { phoneDetected: false, unauthorizedObjectDetected: false, detectedObjects: [], inferMs: 0 }
   }
 }

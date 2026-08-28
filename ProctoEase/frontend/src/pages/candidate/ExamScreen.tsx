@@ -108,15 +108,22 @@ export default function ExamScreen() {
     submitAttempt,
   ])
 
+  // Auto-submit trigger for the violation gate. Memoised so useProctoring's
+  // detector effects (which own setInterval-based ML scan loops) don't see a
+  // new onMaxViolations identity on every ~1 Hz timer re-render — an unstable
+  // identity there tore down and recreated the object-detection interval
+  // faster than its 2.5s period could fire.
+  const handleMaxViolations = useCallback(() => {
+    toast.error("Maximum violations reached. Auto-submitting exam.")
+    handleSubmit()
+  }, [handleSubmit])
+
   // Proctoring — auto-submit on max violations
   const { reportViolation, requestFullscreen, stopCamera } = useProctoring({
     enabled: true,
     examId,
     attemptId,
-    onMaxViolations: () => {
-      toast.error("Maximum violations reached. Auto-submitting exam.")
-      handleSubmit()
-    },
+    onMaxViolations: handleMaxViolations,
   })
 
   useEffect(() => {

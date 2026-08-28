@@ -11,6 +11,21 @@ import {
 } from "@/lib/ml-detection"
 import { startAudioMonitor, type AudioMonitorHandle } from "@/lib/audio-detection"
 import {
+  computeBaseline,
+  medianOf3,
+  updateSustainState,
+  updateObjectTicks,
+  initialSustainState,
+  initialObjectTickState,
+  isHeadTurned,
+  isGazeAway,
+  computeFhDeviation,
+  FH_BASELINE_CLAMP,
+  PITCH_BASELINE_CLAMP,
+  type SustainState,
+  type ObjectTickState,
+} from "@/lib/ml-geometry"
+import {
   AUDIO_COOLDOWN_MS,
   AUDIO_SUSTAINED_MS,
   BULK_PASTE_THRESHOLD,
@@ -27,11 +42,23 @@ import {
   ENABLE_FACE_DETECTOR_FALLBACK,
   ENABLE_FACE_ML,
   ENABLE_GAZE,
+  ENABLE_GAZE_PITCH,
+  ENABLE_GAZE_YAW,
   ENABLE_OBJECT_DETECTION,
   FACE_COUNT_SMOOTHING_WINDOW,
   FACE_SCAN_MS,
   FACE_VIOLATION_COOLDOWN_MS,
+  GAZE_ARM_FRAMES,
+  GAZE_CALIBRATION_MS,
+  GAZE_CALIBRATION_MIN_SAMPLES,
+  GAZE_FH_DEVIATION_THRESHOLD,
   GAZE_GRACE_MS,
+  GAZE_JITTER_TOLERANCE_FRAMES,
+  GAZE_PITCH_GRACE_MS,
+  GAZE_PITCH_MAX_YAW,
+  GAZE_PITCH_TOLERANCE_FRAMES,
+  GAZE_RATIO_SMOOTHING_WINDOW,
+  HEAD_YAW_RATIO_THRESHOLD,
   HEARTBEAT_MS,
   INACTIVITY_MS,
   LIVE_WEBCAM_SELECTOR,
@@ -41,6 +68,7 @@ import {
   MULTI_FACE_PERSIST_MS,
   NO_FACE_PERSIST_MS,
   OBJECT_SNAP_THROTTLE_MS,
+  OBJECT_CONSECUTIVE_TICKS,
   PERIODIC_SNAPSHOT_MS,
   PROCTORING_DEBUG_LOGS,
   RAPID_TAB_COOLDOWN_MS,
@@ -129,10 +157,34 @@ export function useProctoring({
   const fallbackFaceCountHistoryRef = useRef<number[]>([])
   const mlFaceTimerRef    = useRef<ReturnType<typeof setInterval> | null>(null)
   const mlObjectTimerRef  = useRef<ReturnType<typeof setInterval> | null>(null)
-  const gazeAwayStartRef  = useRef<number | null>(null)
-  const headTurnedStartRef = useRef<number | null>(null)
+  // ── Head-orientation temporal state ──
+  // Per-session pitch calibration. Mirrors the adaptive-audio design:
+  // collect over a fixed window -> MEDIAN (robust to one bad sample) ->
+  // clamp to a sane range; pitch stays disarmed until enough samples; the
+  // first valid baseline is kept for the whole session (brief face dropouts
+  // never restart it). pitchBaseline is diagnostic-only.
+  const gazeCalibrationRef = useRef<{
+    startedMs: number | null
+    fhSamples: number[]
+    pitchSamples: number[]
+    fhBaseline: number | null
+    pitchBaseline: number | null
+    done: boolean
+  }>({ startedMs: null, fhSamples: [], pitchSamples: [], fhBaseline: null, pitchBaseline: null, done: false })
+  // Median-of-3 ring buffers, fed only from valid single-face frames.
+  const yawRatioBufRef = useRef<number[]>([])
+  const fhDevBufRef = useRef<number[]>([])
+  // Pure-reducer states: every temporal decision for both orientation
+  // detectors runs through updateSustainState, never inline arithmetic.
+  const headTurnedSustainRef = useRef<SustainState>(initialSustainState())
+  const gazeAwaySustainRef = useRef<SustainState>(initialSustainState())
+  // Object consecutive-tick state (phone + unauthorized) and a monotonic
+  // tick counter so the console cadence can be verified by counting lines.
+  const objectTickStateRef = useRef<ObjectTickState>(initialObjectTickState())
+  const objectTickCountRef = useRef<number>(0)
   const faceModelReadyRef = useRef<boolean>(false)
   const objectModelReadyRef = useRef<boolean>(false)
+  const objectModelReadyLoggedRef = useRef<boolean>(false)
   const audioMonitorRef = useRef<AudioMonitorHandle | null>(null)
   const captureVideoRef = useRef<HTMLVideoElement | null>(null)
   const captureCanvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -186,15 +238,9 @@ export function useProctoring({
     const canvas = captureCanvasRef.current
     if (!video || !canvas) return undefined
 
-    debugLog("Capture attempt - readyState:", {
-      readyState: video.readyState,
-      videoWidth: video.videoWidth,
-    })
+    debugLog(`[ML DEBUG] capture attempt readyState=${video.readyState} videoWidth=${video.videoWidth}`)
     if (video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) {
-      debugLog("captureSnapshot: video not ready", {
-        readyState: video.readyState,
-        videoWidth: video.videoWidth,
-      })
+      debugLog(`[ML DEBUG] capture skipped readyState=${video.readyState} videoWidth=${video.videoWidth}`)
       return undefined
     }
 
@@ -226,7 +272,14 @@ export function useProctoring({
     document.documentElement.requestFullscreen().catch(() => {})
   }, [])
 
+  // Set once exam teardown begins — stopCamera() runs at the top of every
+  // submit path and on unmount. The fullscreen watcher reads it so the
+  // programmatic document.exitFullscreen() we perform during submission is not
+  // mistaken for the candidate bailing out of fullscreen.
+  const tearingDownRef = useRef(false)
+
   const stopCamera = useCallback(() => {
+    tearingDownRef.current = true
     captureStreamRef.current?.getTracks().forEach((t) => t.stop())
     captureStreamRef.current = null
     captureVideoRef.current = null
@@ -482,6 +535,23 @@ export function useProctoring({
     reportViolationRef.current = reportViolation
   }, [reportViolation])
 
+  // Same stable-handle pattern for the two callbacks the ML scan intervals
+  // invoke. Those intervals are created inside effects; if such an effect
+  // re-ran on every render (because one of these callbacks changed identity)
+  // its setInterval would be cleared and recreated faster than its own period,
+  // so it could never fire — the object-detection loop is the worst case at a
+  // 2.5s period against ~1Hz timer-driven re-renders. Reading the latest
+  // callback through a ref lets those effects depend on [enabled] only, so the
+  // interval survives regardless of how the caller memoises onMaxViolations.
+  const checkAndTriggerRef = useRef(checkAndTrigger)
+  useEffect(() => {
+    checkAndTriggerRef.current = checkAndTrigger
+  }, [checkAndTrigger])
+  const processFacePresenceRef = useRef(processFacePresence)
+  useEffect(() => {
+    processFacePresenceRef.current = processFacePresence
+  }, [processFacePresence])
+
   // ── WebSocket connection ──
   useEffect(() => {
     if (!enabled) return
@@ -565,8 +635,20 @@ export function useProctoring({
       }
       mlFaceCountHistoryRef.current = []
       fallbackFaceCountHistoryRef.current = []
-      gazeAwayStartRef.current   = null
-      headTurnedStartRef.current = null
+      gazeCalibrationRef.current = {
+        startedMs: null,
+        fhSamples: [],
+        pitchSamples: [],
+        fhBaseline: null,
+        pitchBaseline: null,
+        done: false,
+      }
+      yawRatioBufRef.current = []
+      fhDevBufRef.current = []
+      headTurnedSustainRef.current = initialSustainState()
+      gazeAwaySustainRef.current = initialSustainState()
+      objectTickStateRef.current = initialObjectTickState()
+      objectTickCountRef.current = 0
 
       if (ws.readyState === WebSocket.OPEN) {
         ws.close()
@@ -653,6 +735,12 @@ export function useProctoring({
       if (store.isFullscreen !== isFs) {
         store.setFullscreen(isFs)
       }
+
+      // Submission (and unmount) call document.exitFullscreen() themselves.
+      // Once teardown has begun that exit is ours, not the candidate leaving —
+      // don't log a fullscreen_exit violation, snapshot it, or fire a
+      // gesture-less re-enter (which the browser rejects anyway).
+      if (tearingDownRef.current) return
 
       if (isFs) {
         if (!store.isFullscreenArmed) {
@@ -904,86 +992,175 @@ export function useProctoring({
 
       const video = captureVideoRef.current
       const hasStream = Boolean(captureStreamRef.current || video?.srcObject)
-      if (!video || video.readyState !== 4 || video.videoWidth <= 0 || !hasStream) return
+      if (!video || video.readyState !== 4 || video.videoWidth <= 0 || !hasStream) {
+        if (PROCTORING_DEBUG_LOGS) {
+          console.log(`[ML DEBUG] video notReady readyState=${video?.readyState ?? -1} videoWidth=${video?.videoWidth ?? 0}`)
+        }
+        return
+      }
 
       const result = detectFacesAndGaze(video)
       if (result.faceCount === -1) return   // model not ready
 
-      debugLog("[FACE DETECTION]", {
-        source: "ML",
-        faceCount: result.faceCount,
-        timestamp: Date.now()
-      })
+      debugLog(`[ML DEBUG] face source=ML faceCount=${result.faceCount} ts=${Date.now()}`)
 
-      await processFacePresence("ML", result.faceCount)
+      await processFacePresenceRef.current("ML", result.faceCount)
 
       const now = Date.now()
+      const orientation = result.orientation
 
-      if (result.faceCount === 0 || result.faceCount >= 2) {
-        gazeAwayStartRef.current  = null
-        headTurnedStartRef.current = null
+      if (result.faceCount !== 1 || !orientation || !orientation.valid) {
+        // No face, multiple faces, or unusable landmarks: an orientation
+        // condition held across such a gap is not one continuous event, so
+        // reset the temporal state. Calibration is deliberately KEPT — a
+        // brief dropout must not restart it.
+        headTurnedSustainRef.current = initialSustainState()
+        gazeAwaySustainRef.current = initialSustainState()
+        yawRatioBufRef.current = []
+        fhDevBufRef.current = []
+        return
       }
 
-      // ── Single face — check gaze ───────────────────────────────────────
-      if (ENABLE_GAZE && result.faceCount === 1) {
+      // ── Single face: calibrate, smooth, decide, sustain ────────────────
 
-        // HEAD TURNED (left/right)
-        if (result.headTurned) {
-          if (headTurnedStartRef.current === null) {
-            headTurnedStartRef.current = now
-          } else if (now - headTurnedStartRef.current >= GAZE_GRACE_MS) {
-            const lastSnap = lastSnapshotByTypeRef.current["head_turned"] || 0
-            if (now - lastSnap >= ML_SNAP_THROTTLE_MS) {
-              const snapshot = await captureSnapshot()
-              lastSnapshotByTypeRef.current["head_turned"] = now
-              addViolation("head_turned", "Head turned away from screen")
-              sendEvent(
-                "head_turned",
-                {
-                  description: "Head turned away from screen",
-                  duration_ms: now - headTurnedStartRef.current,
-                  ml_detected: true,
-                },
-                2,
-                new Date(now).toISOString(),
-                snapshot
-              )
-              checkAndTrigger()
-            }
-            // Reset so it fires again after another grace period
-            headTurnedStartRef.current = now + GAZE_GRACE_MS
+      // STEP 1 — per-session pitch baseline (replaces the old guessed
+      // GAZE_PITCH_NEUTRAL_RATIO constant, which sat at the median of
+      // normal behaviour and caused the 7 false positives).
+      const calib = gazeCalibrationRef.current
+      if (!calib.done) {
+        if (calib.startedMs === null) calib.startedMs = now
+        calib.fhSamples.push(orientation.fhRatio)
+        calib.pitchSamples.push(orientation.pitchRatio)
+        if (
+          now - calib.startedMs >= GAZE_CALIBRATION_MS &&
+          calib.fhSamples.length >= GAZE_CALIBRATION_MIN_SAMPLES
+        ) {
+          calib.fhBaseline = computeBaseline(calib.fhSamples, FH_BASELINE_CLAMP)
+          calib.pitchBaseline = computeBaseline(calib.pitchSamples, PITCH_BASELINE_CLAMP)
+          calib.done = Number.isFinite(calib.fhBaseline)
+          if (PROCTORING_DEBUG_LOGS) {
+            console.log(
+              `[ML DEBUG] gaze baseline fhBaseline=${(calib.fhBaseline ?? Number.NaN).toFixed(3)}` +
+                ` pitchBaseline=${(calib.pitchBaseline ?? Number.NaN).toFixed(3)}` +
+                ` samples=${calib.fhSamples.length}`
+            )
           }
-        } else {
-          headTurnedStartRef.current = null
+        } else if (PROCTORING_DEBUG_LOGS) {
+          console.log(
+            `[ML DEBUG] gaze calibrating samples=${calib.fhSamples.length}/${GAZE_CALIBRATION_MIN_SAMPLES}`
+          )
+        }
+      }
+
+      // STEP 2/3 — median-of-3 smoothing before thresholding, so isolated
+      // single-frame spikes die here and hysteresis is unnecessary.
+      yawRatioBufRef.current.push(orientation.yawRatio)
+      if (yawRatioBufRef.current.length > GAZE_RATIO_SMOOTHING_WINDOW) {
+        yawRatioBufRef.current.shift()
+      }
+      const yawSm = medianOf3(yawRatioBufRef.current)
+
+      // Recompute the deviation against the freshest baseline: if
+      // calibration completed on THIS frame, orientation.fhDeviation was
+      // computed before the baseline existed.
+      const calibrated = calib.done && calib.fhBaseline !== null
+      const fhDev = computeFhDeviation(orientation.fhRatio, calib.fhBaseline)
+      let fhDevSm = 0
+      if (calibrated) {
+        fhDevBufRef.current.push(fhDev)
+        if (fhDevBufRef.current.length > GAZE_RATIO_SMOOTHING_WINDOW) {
+          fhDevBufRef.current.shift()
+        }
+        fhDevSm = medianOf3(fhDevBufRef.current)
+      }
+
+      // Decisions from the SMOOTHED values (pure functions from ml-geometry).
+      // gazeAway is a HEAD-PITCH estimate, not eye tracking; pitch is only
+      // evaluated while the head is roughly frontal.
+      const headTurnedNow = isHeadTurned(yawSm)
+      const gazeAwayNow = isGazeAway(calibrated, yawSm, fhDevSm)
+
+      if (PROCTORING_DEBUG_LOGS) {
+        if (calibrated && Math.abs(yawSm) >= GAZE_PITCH_MAX_YAW) {
+          console.log(`[ML DEBUG] gaze pitchSuppressed reason=yaw yawSm=${yawSm.toFixed(3)}`)
+        }
+        console.log(
+          `[ML DEBUG] gaze faceCount=1 yaw=${orientation.yawRatio.toFixed(3)} yawSm=${yawSm.toFixed(3)}` +
+            ` fh=${orientation.faceHeight.toFixed(3)} io=${orientation.interocular.toFixed(3)}` +
+            ` fhRatio=${orientation.fhRatio.toFixed(3)} fhDev=${fhDev.toFixed(3)} fhDevSm=${fhDevSm.toFixed(3)}` +
+            ` pitchRatio=${orientation.pitchRatio.toFixed(3)} calibrated=${calibrated}` +
+            ` headTurned=${headTurnedNow} gazeAway=${gazeAwayNow}` +
+            ` yawTh=${HEAD_YAW_RATIO_THRESHOLD} fhTh=${GAZE_FH_DEVIATION_THRESHOLD}`
+        )
+      }
+
+      if (ENABLE_GAZE) {
+        // ── head_turned (yaw — validated) ──────────────────────────────
+        // ENABLE_GAZE_YAW gates EMISSION only; measurement and logging
+        // above always run.
+        const yawSustain = updateSustainState(headTurnedSustainRef.current, headTurnedNow, now, {
+          graceMs: GAZE_GRACE_MS,
+          armFrames: GAZE_ARM_FRAMES,
+          toleranceFrames: GAZE_JITTER_TOLERANCE_FRAMES,
+        })
+        headTurnedSustainRef.current = yawSustain.state
+        if (yawSustain.fired && ENABLE_GAZE_YAW) {
+          const lastSnap = lastSnapshotByTypeRef.current["head_turned"] || 0
+          if (now - lastSnap >= ML_SNAP_THROTTLE_MS) {
+            const snapshot = await captureSnapshot()
+            lastSnapshotByTypeRef.current["head_turned"] = now
+            addViolation("head_turned", "Head turned away from screen")
+            sendEvent(
+              "head_turned",
+              {
+                description: "Head turned away from screen",
+                duration_ms: yawSustain.durationMs,
+                ml_detected: true,
+              },
+              2,
+              new Date(now).toISOString(),
+              snapshot
+            )
+            checkAndTriggerRef.current()
+            if (PROCTORING_DEBUG_LOGS) {
+              console.log(`[ML DEBUG] emit head_turned graceMs=${yawSustain.durationMs} throttleOk=true`)
+            }
+          }
         }
 
-        // GAZE AWAY (up/down)
-        if (result.gazeAway) {
-          if (gazeAwayStartRef.current === null) {
-            gazeAwayStartRef.current = now
-          } else if (now - gazeAwayStartRef.current >= GAZE_GRACE_MS) {
-            const lastSnap = lastSnapshotByTypeRef.current["gaze_away"] || 0
-            if (now - lastSnap >= ML_SNAP_THROTTLE_MS) {
-              const snapshot = await captureSnapshot()
-              lastSnapshotByTypeRef.current["gaze_away"] = now
-              addViolation("gaze_away", "Candidate not looking at screen")
-              sendEvent(
-                "gaze_away",
-                {
-                  description: "Gaze directed away from screen",
-                  duration_ms: now - gazeAwayStartRef.current,
-                  ml_detected: true,
-                },
-                2,
-                new Date(now).toISOString(),
-                snapshot
-              )
-              checkAndTrigger()
+        // ── gaze_away (head pitch) ─────────────────────────────────────
+        // ENABLE_GAZE_PITCH gates EMISSION ONLY. Measurement, calibration
+        // and logging above are never gated by it: with the flag off, a
+        // Chrome session still produces the full fhDev distribution needed
+        // to set GAZE_FH_DEVIATION_THRESHOLD.
+        const pitchSustain = updateSustainState(gazeAwaySustainRef.current, gazeAwayNow, now, {
+          graceMs: GAZE_PITCH_GRACE_MS,
+          armFrames: GAZE_ARM_FRAMES,
+          toleranceFrames: GAZE_PITCH_TOLERANCE_FRAMES,
+        })
+        gazeAwaySustainRef.current = pitchSustain.state
+        if (pitchSustain.fired && ENABLE_GAZE_PITCH) {
+          const lastSnap = lastSnapshotByTypeRef.current["gaze_away"] || 0
+          if (now - lastSnap >= ML_SNAP_THROTTLE_MS) {
+            const snapshot = await captureSnapshot()
+            lastSnapshotByTypeRef.current["gaze_away"] = now
+            addViolation("gaze_away", "Candidate not looking at screen")
+            sendEvent(
+              "gaze_away",
+              {
+                description: "Gaze directed away from screen",
+                duration_ms: pitchSustain.durationMs,
+                ml_detected: true,
+              },
+              2,
+              new Date(now).toISOString(),
+              snapshot
+            )
+            checkAndTriggerRef.current()
+            if (PROCTORING_DEBUG_LOGS) {
+              console.log(`[ML DEBUG] emit gaze_away graceMs=${pitchSustain.durationMs} throttleOk=true`)
             }
-            gazeAwayStartRef.current = now + GAZE_GRACE_MS
           }
-        } else {
-          gazeAwayStartRef.current = null
         }
       }
 
@@ -995,7 +1172,7 @@ export function useProctoring({
         mlFaceTimerRef.current = null
       }
     }
-  }, [enabled, ensureCaptureStream, addViolation, sendEvent, checkAndTrigger, captureSnapshot, processFacePresence])
+  }, [enabled, ensureCaptureStream, addViolation, sendEvent, captureSnapshot])
 
   // ── Object Detection (phone / unauthorized items) ────────────────────────
   useEffect(() => {
@@ -1005,21 +1182,52 @@ export function useProctoring({
     mlObjectTimerRef.current = setInterval(async () => {
       if (!objectModelReadyRef.current && isObjectModelReady()) {
         objectModelReadyRef.current = true
+        if (PROCTORING_DEBUG_LOGS && !objectModelReadyLoggedRef.current) {
+          console.log("[ML DEBUG] object modelReady=true")
+          objectModelReadyLoggedRef.current = true
+        }
       }
-      if (!objectModelReadyRef.current || !isObjectModelReady()) return
+      if (!objectModelReadyRef.current || !isObjectModelReady()) {
+        if (PROCTORING_DEBUG_LOGS && !objectModelReadyRef.current) {
+          console.log("[ML DEBUG] object modelReady=false")
+        }
+        return
+      }
 
       const ok = await ensureCaptureStream()
       if (!ok) return
 
       const video = captureVideoRef.current
       const hasStream = Boolean(captureStreamRef.current || video?.srcObject)
-      if (!video || video.readyState !== 4 || video.videoWidth <= 0 || !hasStream) return
+      if (!video || video.readyState !== 4 || video.videoWidth <= 0 || !hasStream) {
+        if (PROCTORING_DEBUG_LOGS) {
+          console.log(`[ML DEBUG] video notReady readyState=${video?.readyState ?? -1} videoWidth=${video?.videoWidth ?? 0}`)
+        }
+        return
+      }
 
-      const result = await detectObjects(video)
+      objectTickCountRef.current += 1
+      const tick = objectTickCountRef.current
+
+      const result = await detectObjects(video, tick)
       const now = Date.now()
 
-      // Phone detected
-      if (result.phoneDetected) {
+      // Consecutive-tick gate for BOTH object events (pure reducer from
+      // ml-geometry). The precedence rule — unauthorized_object suppressed
+      // while a phone is detected — is encoded in updateObjectTicks.
+      const ticks = updateObjectTicks(objectTickStateRef.current, result, OBJECT_CONSECUTIVE_TICKS)
+      objectTickStateRef.current = ticks.state
+
+      if (PROCTORING_DEBUG_LOGS) {
+        console.log(
+          `[ML DEBUG] object tick=${tick} result phone=${result.phoneDetected}` +
+            ` unauth=${result.unauthorizedObjectDetected} n=${result.detectedObjects.length}` +
+            ` inferMs=${Math.round(result.inferMs)}`
+        )
+      }
+
+      // Phone detected — consecutive-tick gate + snapshot throttle
+      if (ticks.emitPhone) {
         const lastSnap = lastSnapshotByTypeRef.current["phone_detected"] || 0
         if (now - lastSnap >= OBJECT_SNAP_THROTTLE_MS) {
           const snapshot = await captureSnapshot()
@@ -1036,12 +1244,16 @@ export function useProctoring({
             new Date(now).toISOString(),
             snapshot
           )
-          checkAndTrigger()
+          checkAndTriggerRef.current()
+          if (PROCTORING_DEBUG_LOGS) {
+            console.log(`[ML DEBUG] emit phone_detected consecutiveTicks=${ticks.state.phoneTicks} throttleOk=true`)
+          }
         }
       }
 
-      // Other unauthorized object (only if no phone — avoid double-firing)
-      if (result.unauthorizedObjectDetected && !result.phoneDetected) {
+      // Other unauthorized object — same consecutive-tick gate as phone,
+      // and only when no phone was detected (avoid double-firing).
+      if (ticks.emitUnauthorized) {
         const lastSnap = lastSnapshotByTypeRef.current["unauthorized_object"] || 0
         if (now - lastSnap >= OBJECT_SNAP_THROTTLE_MS) {
           const snapshot = await captureSnapshot()
@@ -1061,7 +1273,10 @@ export function useProctoring({
             new Date(now).toISOString(),
             snapshot
           )
-          checkAndTrigger()
+          checkAndTriggerRef.current()
+          if (PROCTORING_DEBUG_LOGS) {
+            console.log(`[ML DEBUG] emit unauthorized_object consecutiveTicks=${ticks.state.unauthorizedTicks} throttleOk=true`)
+          }
         }
       }
 
@@ -1073,7 +1288,7 @@ export function useProctoring({
         mlObjectTimerRef.current = null
       }
     }
-  }, [enabled, ensureCaptureStream, captureSnapshot, addViolation, sendEvent, checkAndTrigger])
+  }, [enabled, ensureCaptureStream, captureSnapshot, addViolation, sendEvent])
 
   // ── Basic face consistency check (FaceDetector API when available) ──
   //
@@ -1112,13 +1327,9 @@ export function useProctoring({
         const faces = await detector.detect(video)
         const count = faces.length
 
-        debugLog("[FACE DETECTION]", {
-          source: "Fallback",
-          faceCount: count,
-          timestamp: Date.now()
-        })
+        debugLog(`[ML DEBUG] face source=Fallback faceCount=${count} ts=${Date.now()}`)
 
-        await processFacePresence("Fallback", count)
+        await processFacePresenceRef.current("Fallback", count)
 
         const prev = lastFaceCountRef.current
         lastFaceCountRef.current = count
@@ -1137,7 +1348,7 @@ export function useProctoring({
             2,
             new Date(now).toISOString()
           )
-          checkAndTrigger()
+          checkAndTriggerRef.current()
         }
       } catch {
         // FaceDetector may fail on some devices/browsers; keep proctoring non-blocking.
@@ -1150,7 +1361,7 @@ export function useProctoring({
         faceTimerRef.current = null
       }
     }
-  }, [enabled, ensureCaptureStream, addViolation, sendEvent, checkAndTrigger, processFacePresence])
+  }, [enabled, ensureCaptureStream, addViolation, sendEvent])
 
   // ── Sustained voice / audio activity detection (microphone level) ─────────
   //
