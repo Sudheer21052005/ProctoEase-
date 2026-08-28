@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useParams } from "react-router-dom"
-import { Loader2, ShieldCheck, ShieldAlert, UserRound, Camera, FileCode2 } from "lucide-react"
+import { Loader2, ShieldCheck, ShieldAlert, UserRound, Camera, FileCode2, Download } from "lucide-react"
+import { toast } from "sonner"
 import { useExamAttempts, useAnswers } from "@/hooks/useAttempts"
 import { useAttemptRiskScore, useExamRiskScores } from "@/hooks/useRisk"
 import { useAttemptViolationCount, useAttemptEventsPaged } from "@/hooks/useProctoringData"
@@ -8,6 +9,7 @@ import { useAttemptCodeSubmissions } from "@/hooks/useCodeExecution"
 import { formatDate } from "@/lib/utils"
 import { API_BASE_URL } from "@/lib/constants"
 import FeatureGuard from "@/components/security/FeatureGuard"
+import { reportingApi } from "@/api/reporting.api"
 
 function riskTone(level?: string) {
   const value = (level || "").toLowerCase()
@@ -115,6 +117,7 @@ export default function SummarySection() {
   } = useExamRiskScores(examId || "")
 
   const [selectedAttemptId, setSelectedAttemptId] = useState("")
+  const [isDownloadingReport, setIsDownloadingReport] = useState(false)
 
   useEffect(() => {
     if (!selectedAttemptId && attempts.length > 0) {
@@ -252,19 +255,51 @@ export default function SummarySection() {
           </h2>
 
           <label className="text-xs font-semibold uppercase tracking-widest text-slate-500 block mb-2">Attempt</label>
-          <select
-            value={selectedAttemptId}
-            onChange={(e) => setSelectedAttemptId(e.target.value)}
-            className="w-full max-w-xl px-3 py-2.5 rounded-xl border border-white/[0.08] bg-[#1e2638] text-white text-sm outline-none focus:border-[#6366f1]/50"
-          >
-            {attempts.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.candidate_email
-                  ? `${a.candidate_email} | ${a.status}`
-                  : `${a.id.slice(0, 8)}... | ${a.status}`}
-              </option>
-            ))}
-          </select>
+          <div className="flex flex-wrap items-center gap-3">
+            <select
+              value={selectedAttemptId}
+              onChange={(e) => setSelectedAttemptId(e.target.value)}
+              className="flex-1 min-w-0 max-w-xl px-3 py-2.5 rounded-xl border border-white/[0.08] bg-[#1e2638] text-white text-sm outline-none focus:border-[#6366f1]/50"
+            >
+              {attempts.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.candidate_email
+                    ? `${a.candidate_email} | ${a.status}`
+                    : `${a.id.slice(0, 8)}... | ${a.status}`}
+                </option>
+              ))}
+            </select>
+
+            <button
+              id="btn-download-integrity-report"
+              disabled={!selectedAttemptId || isDownloadingReport}
+              onClick={async () => {
+                if (!selectedAttemptId || isDownloadingReport) return
+                setIsDownloadingReport(true)
+                try {
+                  await reportingApi.downloadIntegrityReportPdf(selectedAttemptId)
+                  toast.success("Integrity report downloaded.")
+                } catch (err) {
+                  const message =
+                    err instanceof Error
+                      ? err.message
+                      : "Unable to download the integrity report."
+                  toast.error(message)
+                } finally {
+                  setIsDownloadingReport(false)
+                }
+              }}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-white/[0.08] bg-[#1e2638] text-sm font-medium text-slate-200 hover:border-[#6366f1]/50 hover:text-white hover:bg-[#252f44] transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[#1e2638] shrink-0"
+              aria-label="Download candidate integrity report PDF"
+            >
+              {isDownloadingReport ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4" strokeWidth={1.75} />
+              )}
+              {isDownloadingReport ? "Generating…" : "Download Integrity Report"}
+            </button>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">

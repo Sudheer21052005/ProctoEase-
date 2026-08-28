@@ -104,4 +104,89 @@ export const reportingApi = {
     link.remove()
     window.URL.revokeObjectURL(url)
   },
+
+  /**
+   * Download the Candidate Integrity Report PDF for a single exam attempt.
+   *
+   * Safety contract:
+   *  - Only triggers a browser download when the server responds with HTTP 200
+   *    AND the response Content-Type is application/pdf AND the blob is non-empty.
+   *  - Error responses (4xx/5xx) are read as JSON/text and surfaced as typed
+   *    Error objects so callers can show meaningful messages without ever saving
+   *    an error blob as a .pdf.
+   */
+  downloadIntegrityReportPdf: async (attemptId: string): Promise<void> => {
+    // Axios throws for non-2xx when validateStatus is default, but blob
+    // responseType means the thrown error's response.data is also a Blob.
+    // We use validateStatus: () => true so we always get the raw response
+    // and can inspect status + Content-Type ourselves.
+    const response = await api.get(
+      `/attempts/${attemptId}/integrity-report/pdf`,
+      {
+        responseType: "blob",
+        validateStatus: () => true,   // never throw on status
+      }
+    )
+
+    const { status, data: blob, headers } = response
+
+    // --- Error path: decode the blob body and throw with a clean message ---
+    if (status !== 200) {
+      let detail = ""
+      try {
+        const text = await (blob as Blob).text()
+        const parsed = JSON.parse(text) as { detail?: string; error_code?: string }
+        detail = parsed.detail || parsed.error_code || ""
+      } catch {
+        /* ignore — blob is not parseable JSON */
+      }
+
+      if (status === 401) {
+        throw new Error(detail || "Not authorized. Please log in again.")
+      }
+      if (status === 403) {
+        throw new Error(
+          detail || "You do not have permission to download this report."
+        )
+      }
+      if (status === 404) {
+        throw new Error(detail || "The attempt or report was not found.")
+      }
+      if (status === 500) {
+        throw new Error(
+          detail || "The integrity report could not be generated on the server."
+        )
+      }
+      throw new Error(
+        detail || `Unable to download the integrity report (HTTP ${status}).`
+      )
+    }
+
+    // --- Validate Content-Type: must be application/pdf ---
+    const contentType: string = (headers["content-type"] as string) || ""
+    if (!contentType.includes("application/pdf")) {
+      // Server returned 200 but with wrong content type — do not download.
+      throw new Error(
+        "The server returned an unexpected content type. The report was not downloaded."
+      )
+    }
+
+    // --- Validate blob is non-empty ---
+    const pdfBlob = blob as Blob
+    if (pdfBlob.size === 0) {
+      throw new Error("The server returned an empty response. The report was not downloaded.")
+    }
+
+    // --- Safe to trigger browser download ---
+    const url = window.URL.createObjectURL(
+      new Blob([pdfBlob], { type: "application/pdf" })
+    )
+    const link = document.createElement("a")
+    link.href = url
+    link.setAttribute("download", `integrity-report-${attemptId}.pdf`)
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.URL.revokeObjectURL(url)
+  },
 }
