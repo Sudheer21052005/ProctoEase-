@@ -13,3 +13,6 @@ IMPLEMENTATION_PLAN.md
 summary.md
 nemetronsummary.md
 CLAUDE.md
+
+# Generated test artifacts
+tests/output/
