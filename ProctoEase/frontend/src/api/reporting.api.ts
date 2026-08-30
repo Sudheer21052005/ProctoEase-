@@ -59,12 +59,82 @@ export interface PaginatedResponse<T> {
   pages: number
 }
 
+/* ── Exam-wide candidate evaluation (Phase B endpoint) ──
+ * Snake_case, consumed verbatim from app/schemas/exam_evaluation.py. The
+ * recommendation is produced by the backend's deterministic engine; the
+ * frontend NEVER recomputes it. */
+export type RecommendationCode =
+  | "MANUAL_REVIEW"
+  | "NOT_RECOMMENDED_ACADEMIC"
+  | "NOT_RECOMMENDED_BOTH"
+  | "INTEGRITY_REVIEW"
+  | "SHORTLIST"
+  | "STRONG_SHORTLIST"
+
+export type RiskLevel = "low" | "medium" | "high" | "critical"
+
+export interface RecommendationOut {
+  code: RecommendationCode
+  label: string
+  reason: string
+}
+
+export interface CandidateEvaluation {
+  // Identity
+  attempt_id: string
+  candidate_id: string
+  candidate_name: string | null
+  candidate_email: string | null
+  // Attempt status & timing
+  status: string // started | submitted | evaluated
+  started_at: string | null
+  submitted_at: string | null
+  duration_minutes: number | null
+  // Score breakdown (null when the attempt has no graded answers yet)
+  total_score: number | null
+  max_score: number
+  percentage: number | null
+  objective_score: number | null
+  objective_max_score: number
+  coding_score: number | null
+  coding_max_score: number
+  // Persisted risk (never recomputed here)
+  risk_score: number | null
+  risk_level: RiskLevel | null
+  risk_available: boolean
+  // Violation severity counts (excludes benign periodic_check)
+  total_violations: number
+  high_violations: number
+  critical_violations: number
+  // Severe-integrity gate used by the recommendation engine
+  severe_integrity: boolean
+  // System recommendation (deterministic 7-rule engine)
+  recommendation: RecommendationOut
+}
+
+export interface ExamEvaluationResponse {
+  exam_id: string
+  exam_title: string
+  total_attempts: number
+  max_score: number
+  objective_max_score: number
+  coding_max_score: number
+  // Engine benchmarks (NOT a per-exam pass mark)
+  passing_score_pct: number
+  borderline_max_pct: number
+  excellence_score_pct: number
+  candidates: CandidateEvaluation[]
+}
+
 export const reportingApi = {
   dashboard: () =>
     api.get<TenantDashboard>("/dashboard").then((r) => r.data),
 
   examAnalytics: (examId: string) =>
     api.get<ExamAnalytics>(`/exams/${examId}/analytics`).then((r) => r.data),
+
+  examEvaluation: (examId: string) =>
+    api.get<ExamEvaluationResponse>(`/exams/${examId}/evaluation`).then((r) => r.data),
 
   examQuestionStats: (examId: string, page = 1, pageSize = 10) =>
     api

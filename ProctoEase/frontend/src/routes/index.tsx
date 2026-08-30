@@ -21,6 +21,7 @@ const PlagiarismList = lazy(() => import("@/pages/recruiter/PlagiarismList"))
 const PlagiarismReportDetail = lazy(() => import("@/pages/recruiter/PlagiarismReportDetail"))
 const ExamWorkspaceLayout = lazy(() => import("@/pages/recruiter/exam-workspace/ExamWorkspaceLayout"))
 const DetailsSection = lazy(() => import("@/pages/recruiter/exam-workspace/DetailsSection"))
+const EvaluationSection = lazy(() => import("@/pages/recruiter/exam-workspace/EvaluationSection"))
 const QuestionsSection = lazy(() => import("@/pages/recruiter/exam-workspace/QuestionsSection"))
 const AttemptsSection = lazy(() => import("@/pages/recruiter/exam-workspace/AttemptsSection"))
 const AnalyticsSection = lazy(() => import("@/pages/recruiter/exam-workspace/AnalyticsSection"))
@@ -108,6 +109,7 @@ export const router = createBrowserRouter([
         children: [
           { index: true, element: <Navigate to="summary" replace /> },
           { path: "summary", element: withSuspense(<SummarySection />) },
+          { path: "evaluation", element: withSuspense(<EvaluationSection />) },
           { path: "details", element: withSuspense(<DetailsSection />) },
           { path: "questions", element: withSuspense(<QuestionsSection />) },
           { path: "attempts", element: withSuspense(<AttemptsSection />) },

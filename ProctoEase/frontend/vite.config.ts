@@ -16,6 +16,6 @@ export default defineConfig({
     // DOM-free (pure evaluator + injectable browser deps), so no jsdom is
     // needed and the suite stays fast.
     environment: "node",
-    include: ["src/**/*.test.ts"],
+    include: ["src/**/*.test.{ts,tsx}"],
   },
 })

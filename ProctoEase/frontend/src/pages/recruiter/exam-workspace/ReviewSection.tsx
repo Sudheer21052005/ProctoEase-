@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react"
-import { useParams } from "react-router-dom"
+import { useEffect, useMemo, useRef, useState } from "react"
+import { useParams, useSearchParams } from "react-router-dom"
 import { ClipboardList, Loader2 } from "lucide-react"
 import { useExamAttempts, useAnswers } from "@/hooks/useAttempts"
 import { useQuestionsForExam } from "@/hooks/useQuestions"
@@ -26,11 +26,28 @@ export default function ReviewSection() {
 
   const [selectedAttemptId, setSelectedAttemptId] = useState("")
 
+  // Deep-link support: /recruiter/exams/:examId/review?attemptId=<id>
+  // pre-selects that attempt. Honored exactly ONCE (ref-guarded) so a later
+  // manual <select> change is never overridden; without a valid requested id
+  // the default selection falls back to attempts[0] exactly as before.
+  const [searchParams] = useSearchParams()
+  const requestedAttemptId = searchParams.get("attemptId") || ""
+  const deepLinkConsumedRef = useRef(false)
+
   useEffect(() => {
     if (!selectedAttemptId && attempts.length > 0) {
       setSelectedAttemptId(attempts[0].id)
     }
   }, [attempts, selectedAttemptId])
+
+  useEffect(() => {
+    if (deepLinkConsumedRef.current || attempts.length === 0) return
+    const requested = requestedAttemptId
+    if (requested && attempts.some((a) => a.id === requested)) {
+      deepLinkConsumedRef.current = true
+      setSelectedAttemptId(requested)
+    }
+  }, [attempts, requestedAttemptId])
 
   const {
     data: answerData,

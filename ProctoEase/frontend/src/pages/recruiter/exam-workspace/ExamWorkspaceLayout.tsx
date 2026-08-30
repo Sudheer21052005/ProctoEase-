@@ -4,6 +4,7 @@ import { useExam } from "@/hooks/useExams"
 
 const TABS = [
   { to: "summary", label: "Summary" },
+  { to: "evaluation", label: "Evaluation" },
   { to: "details", label: "Details" },
   { to: "questions", label: "Questions" },
   { to: "attempts", label: "Attempts" },

@@ -22,6 +22,16 @@ export function useExamAnalytics(examId: string) {
   })
 }
 
+export function useExamEvaluation(examId: string) {
+  return useQuery({
+    queryKey: ["reporting", "exam", examId, "evaluation"],
+    queryFn: () => reportingApi.examEvaluation(examId),
+    enabled: !!examId,
+    staleTime: 45 * 1000,
+    refetchOnWindowFocus: false,
+  })
+}
+
 export function useExamQuestionStats(examId: string, page: number, pageSize: number) {
   return useQuery({
     queryKey: ["reporting", "exam", examId, "question-stats", page, pageSize],
