@@ -21,7 +21,12 @@ from app.schemas.reporting import (
     CandidatePerformance,
     PaginatedResponse,
 )
-from app.services import reporting_service, integrity_report_service
+from app.schemas.exam_evaluation import ExamEvaluationResponse
+from app.services import (
+    reporting_service,
+    integrity_report_service,
+    exam_evaluation_service,
+)
 
 router = APIRouter(tags=["Reporting"])
 
@@ -72,6 +77,34 @@ async def exam_analytics(
     return await reporting_service.get_exam_analytics(
         db, exam_id, user.tenant_id
     )
+
+
+# ── Exam-Wide Candidate Evaluation ──────────────────────────────
+
+
+@router.get(
+    "/exams/{exam_id}/evaluation",
+    response_model=ExamEvaluationResponse,
+    summary="Exam-wide candidate evaluation",
+)
+async def exam_evaluation(
+    exam_id: uuid.UUID,
+    user: User = Depends(require_role(UserRole.RECRUITER, UserRole.ADMIN)),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Compact per-candidate evaluation for every attempt in one exam.
+
+    Each entry includes candidate identity, attempt status and timing, the
+    score breakdown (objective + coding, with max and percentage), the
+    persisted risk score/level, violation severity counts, and a deterministic
+    system recommendation. Read-only; risk is never recomputed here.
+    Recruiter / Admin only.
+    """
+    return await exam_evaluation_service.get_exam_evaluation(
+        db, exam_id, user.tenant_id
+    )
+
 
 
 # ── Question Stats (paginated) ──────────────────────────────────
