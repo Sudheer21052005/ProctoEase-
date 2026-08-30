@@ -110,6 +110,33 @@ export interface CandidateEvaluation {
   severe_integrity: boolean
   // System recommendation (deterministic 7-rule engine)
   recommendation: RecommendationOut
+  // ── Phase D: HUMAN recruiter decision — stored/published separately from
+  // the recommendation above and never overwriting it. null = never reviewed.
+  recruiter_decision: RecruiterDecisionValue | null
+  recruiter_notes: string | null
+  reviewed_by: string | null
+  reviewed_at: string | null
+}
+
+/* ── Phase D: recruiter decision ──
+ * Final HUMAN judgment, distinct from the system recommendation. The recruiter
+ * has final authority and may override the recommendation in either direction. */
+export const RECRUITER_DECISIONS = ["PENDING", "SHORTLISTED", "REVIEW", "REJECTED"] as const
+
+export type RecruiterDecisionValue = (typeof RECRUITER_DECISIONS)[number]
+
+export interface RecruiterDecisionUpdate {
+  decision: RecruiterDecisionValue
+  notes?: string | null
+}
+
+export interface RecruiterDecisionRead {
+  attempt_id: string
+  decision: string
+  notes: string | null
+  reviewed_by: string | null
+  reviewed_by_email: string | null
+  reviewed_at: string | null
 }
 
 export interface ExamEvaluationResponse {
@@ -135,6 +162,11 @@ export const reportingApi = {
 
   examEvaluation: (examId: string) =>
     api.get<ExamEvaluationResponse>(`/exams/${examId}/evaluation`).then((r) => r.data),
+
+  setRecruiterDecision: (attemptId: string, payload: RecruiterDecisionUpdate) =>
+    api
+      .put<RecruiterDecisionRead>(`/attempts/${attemptId}/recruiter-decision`, payload)
+      .then((r) => r.data),
 
   examQuestionStats: (examId: string, page = 1, pageSize = 10) =>
     api

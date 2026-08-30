@@ -20,14 +20,17 @@ const refetch = vi.fn()
 const navigate = vi.fn()
 const toastSuccess = vi.fn()
 const toastError = vi.fn()
+const mutateAsync = vi.fn()
 
 let mockHookReturn: Pick<UseQueryResult<ExamEvaluationResponse, Error>, "data" | "isLoading" | "isError" | "refetch" | "isFetching">
 
 vi.mock("@/hooks/useReporting", () => ({
   useExamEvaluation: () => mockHookReturn,
+  useSetRecruiterDecision: () => ({ mutateAsync }),
 }))
 
 vi.mock("@/api/reporting.api", () => ({
+  RECRUITER_DECISIONS: ["PENDING", "SHORTLISTED", "REVIEW", "REJECTED"],
   reportingApi: {
     downloadIntegrityReportPdf: vi.fn(),
   },
@@ -87,6 +90,10 @@ function makeCandidate(overrides: Partial<CandidateEvaluation> = {}): CandidateE
       label: "Shortlist",
       reason: "Score 82% is at or above the excellence benchmark with clean integrity.",
     },
+    recruiter_decision: null,
+    recruiter_notes: null,
+    reviewed_by: null,
+    reviewed_at: null,
     ...overrides,
   }
 }
@@ -253,5 +260,125 @@ describe("EvaluationSection", () => {
     expect(reasonEl).toBeInTheDocument()
     // Also exposed as the pill's tooltip.
     expect(screen.getByTitle(reason)).toBeInTheDocument()
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase D — human recruiter decision (separate from system recommendation)
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("EvaluationSection — recruiter decision (Phase D)", () => {
+  it("D1. displays the current decision per row; never-reviewed renders PENDING; reviewed metadata shown", () => {
+    mockHookReturn.data = makeResponse([
+      makeCandidate(),
+      makeCandidate({
+        attempt_id: "attempt-REVIEWED",
+        candidate_name: "Sanya Nair",
+        candidate_email: "sanya@techcorp.demo",
+        recommendation: {
+          code: "NOT_RECOMMENDED_BOTH",
+          label: "Not recommended (both)",
+          reason: "Failing score with severe integrity findings.",
+        },
+        recruiter_decision: "REJECTED",
+        recruiter_notes: "Reviewed integrity evidence and examination performance.",
+        reviewed_by: "reviewer-1",
+        reviewed_at: "2026-08-30T12:00:00Z",
+      }),
+    ])
+    renderSection()
+
+    // Never-reviewed row shows the PENDING default; reviewed row shows its
+    // persisted decision. Both columns coexist with the system recommendation
+    // (its labels/reasons still visible above).
+    expect(screen.getAllByText("PENDING").length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText("REJECTED")).toBeInTheDocument()
+    expect(screen.getByText("Reviewed integrity evidence and examination performance.")).toBeInTheDocument()
+    // Metadata line ("Reviewed <date>") plus the notes line both mention "Reviewed".
+    expect(screen.getAllByText(/Reviewed/i).length).toBeGreaterThanOrEqual(2)
+    expect(screen.getByText("Shortlist")).toBeInTheDocument() // system recommendation untouched
+  })
+
+  it("D2. Decide opens the editor with select + notes; save posts the decision for THAT attempt id and toasts success", async () => {
+    mutateAsync.mockResolvedValueOnce({
+      attempt_id: "attempt-AAA",
+      decision: "SHORTLISTED",
+      notes: "Strong technical performance after manual review.",
+      reviewed_by: "reviewer-1",
+      reviewed_by_email: "recruiter@techcorp.com",
+      reviewed_at: "2026-08-30T12:00:00Z",
+    })
+    mockHookReturn.data = makeResponse([
+      makeCandidate(),
+      makeCandidate({ attempt_id: "attempt-BBB", candidate_name: "Grace Hopper", candidate_email: "grace@navy.mil" }),
+    ])
+    renderSection()
+
+    // Open the editor on the FIRST row only (Grace's row has its own editor).
+    const decideButtons = screen.getAllByRole("button", { name: "Decide" })
+    expect(decideButtons).toHaveLength(2)
+    fireEvent.click(decideButtons[0])
+
+    const decisionSelect = screen.getByLabelText("Recruiter decision")
+    const notesInput = screen.getByLabelText("Recruiter notes")
+    fireEvent.change(decisionSelect, { target: { value: "SHORTLISTED" } })
+    fireEvent.change(notesInput, { target: { value: "Strong technical performance after manual review." } })
+    fireEvent.click(screen.getByRole("button", { name: /save decision/i }))
+
+    await vi.waitFor(() =>
+      expect(mutateAsync).toHaveBeenCalledExactlyOnceWith({
+        attemptId: "attempt-AAA", // the row whose editor was used
+        payload: { decision: "SHORTLISTED", notes: "Strong technical performance after manual review." },
+      })
+    )
+    await vi.waitFor(() => expect(toastSuccess).toHaveBeenCalled())
+    expect(toastError).not.toHaveBeenCalled()
+  })
+
+  it("D3. API failure surfaces an error toast and keeps the editor open", async () => {
+    mutateAsync.mockRejectedValueOnce(new Error("Unable to save the recruiter decision."))
+    mockHookReturn.data = makeResponse([makeCandidate()])
+    renderSection()
+
+    fireEvent.click(screen.getByRole("button", { name: "Decide" }))
+    fireEvent.click(screen.getByRole("button", { name: /save decision/i }))
+
+    await vi.waitFor(() => expect(toastError).toHaveBeenCalledWith("Unable to save the recruiter decision."))
+    expect(toastSuccess).not.toHaveBeenCalled()
+    expect(screen.getByLabelText("Recruiter decision")).toBeInTheDocument() // editor still open
+  })
+
+  it("D4. system recommendation and recruiter decision remain visibly separate", () => {
+    mockHookReturn.data = makeResponse([
+      makeCandidate({
+        recommendation: {
+          code: "NOT_RECOMMENDED_BOTH",
+          label: "Not recommended (both)",
+          reason: "Failing score with severe integrity findings.",
+        },
+        recruiter_decision: "SHORTLISTED", // human override — valid by design
+        recruiter_notes: "Recruiter has final authority.",
+        reviewed_at: "2026-08-30T12:00:00Z",
+      }),
+    ])
+    renderSection()
+
+    // Both are present, distinct, and neither replaced the other.
+    expect(screen.getByText("Not recommended (both)")).toBeInTheDocument()
+    expect(screen.getByText("SHORTLISTED")).toBeInTheDocument()
+    expect(screen.getByText("Recruiter has final authority.")).toBeInTheDocument()
+    // The banner states the separation rule.
+    expect(screen.getByText(/never alters the system recommendation/i)).toBeInTheDocument()
+  })
+
+  it("D5. Cancel closes the editor without calling the API", () => {
+    mockHookReturn.data = makeResponse([makeCandidate()])
+    renderSection()
+
+    fireEvent.click(screen.getByRole("button", { name: "Decide" }))
+    expect(screen.getByLabelText("Recruiter decision")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+    expect(screen.queryByLabelText("Recruiter decision")).not.toBeInTheDocument()
+    expect(mutateAsync).not.toHaveBeenCalled()
   })
 })

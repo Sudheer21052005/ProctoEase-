@@ -425,6 +425,13 @@ async def get_exam_evaluation(
                     "label": rec["label"],
                     "reason": rec["reason"],
                 },
+                # Phase D: HUMAN recruiter decision — verbatim passthrough,
+                # deliberately separate from the recommendation above (a
+                # decision never overwrites or alters the recommendation).
+                "recruiter_decision": att.recruiter_decision,
+                "recruiter_notes": att.recruiter_notes,
+                "reviewed_by": att.reviewed_by,
+                "reviewed_at": att.reviewed_at,
             }
         )
 

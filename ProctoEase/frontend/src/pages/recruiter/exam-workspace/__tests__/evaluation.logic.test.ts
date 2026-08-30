@@ -39,6 +39,10 @@ function makeCandidate(overrides: Partial<CandidateEvaluation> = {}): CandidateE
       label: "Shortlist",
       reason: "Score 82% is at or above the excellence benchmark with clean integrity.",
     },
+    recruiter_decision: null,
+    recruiter_notes: null,
+    reviewed_by: null,
+    reviewed_at: null,
     ...overrides,
   }
 }

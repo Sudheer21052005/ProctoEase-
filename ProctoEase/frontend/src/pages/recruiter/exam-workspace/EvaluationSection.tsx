@@ -1,10 +1,11 @@
-import { useMemo, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import { useNavigate, useParams } from "react-router-dom"
-import { Loader2, Download, ExternalLink, Search, ShieldQuestion } from "lucide-react"
+import { Loader2, Download, ExternalLink, Search, ShieldQuestion, Gavel } from "lucide-react"
 import { toast } from "sonner"
-import { useExamEvaluation } from "@/hooks/useReporting"
+import { useExamEvaluation, useSetRecruiterDecision } from "@/hooks/useReporting"
 import { reportingApi } from "@/api/reporting.api"
-import type { CandidateEvaluation } from "@/api/reporting.api"
+import type { CandidateEvaluation, RecruiterDecisionValue } from "@/api/reporting.api"
+import { RECRUITER_DECISIONS } from "@/api/reporting.api"
 import FeatureGuard from "@/components/security/FeatureGuard"
 import EmptyState from "@/components/shared/EmptyState"
 import StatusBadge from "@/components/shared/StatusBadge"
@@ -34,6 +35,14 @@ const REC_TONE: Record<string, string> = {
 /** Unknown / future codes still render, with a neutral tone and the backend label verbatim. */
 function recommendationTone(code: string): string {
   return REC_TONE[code] ?? "border-white/[0.1] bg-white/[0.05] text-slate-300"
+}
+
+/** Pill tone per HUMAN recruiter decision (Phase D). Presentation only. */
+const DECISION_TONE: Record<string, string> = {
+  SHORTLISTED: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
+  REVIEW: "border-amber-400/30 bg-amber-400/10 text-amber-200",
+  REJECTED: "border-rose-500/30 bg-rose-500/10 text-rose-300",
+  PENDING: "border-white/[0.1] bg-white/[0.05] text-slate-400",
 }
 
 function riskTone(level: string): string {
@@ -69,10 +78,53 @@ function Pill({
 const STATIC_TH =
   "px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500"
 
-/** One table row. Holds its OWN download state so one download never blocks the table. */
-function EvaluationRow({ candidate }: { candidate: CandidateEvaluation }) {
+/** One table row. Holds its OWN download/edit state so one action never blocks the table. */
+function EvaluationRow({
+  candidate,
+  onSaveDecision,
+}: {
+  candidate: CandidateEvaluation
+  onSaveDecision: (
+    attemptId: string,
+    decision: RecruiterDecisionValue,
+    notes: string | null
+  ) => Promise<{ reviewed_by_email: string | null }>
+}) {
   const navigate = useNavigate()
   const [isDownloading, setIsDownloading] = useState(false)
+
+  // Phase D: inline decision editor state (per-row, isolated from the table).
+  const [editing, setEditing] = useState(false)
+  const [savingDecision, setSavingDecision] = useState(false)
+  const [draftDecision, setDraftDecision] = useState<RecruiterDecisionValue>(
+    candidate.recruiter_decision ?? "PENDING"
+  )
+  const [draftNotes, setDraftNotes] = useState(candidate.recruiter_notes ?? "")
+
+  const startEditing = () => {
+    setDraftDecision(candidate.recruiter_decision ?? "PENDING")
+    setDraftNotes(candidate.recruiter_notes ?? "")
+    setEditing(true)
+  }
+
+  const handleSaveDecision = async () => {
+    if (savingDecision) return
+    setSavingDecision(true)
+    try {
+      const saved = await onSaveDecision(candidate.attempt_id, draftDecision, draftNotes.trim() === "" ? null : draftNotes)
+      toast.success(
+        saved.reviewed_by_email
+          ? `Decision saved — reviewed by ${saved.reviewed_by_email}.`
+          : "Recruiter decision saved."
+      )
+      setEditing(false)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to save the recruiter decision."
+      toast.error(message)
+    } finally {
+      setSavingDecision(false)
+    }
+  }
 
   const handleDownload = async () => {
     if (isDownloading) return
@@ -193,7 +245,83 @@ function EvaluationRow({ candidate }: { candidate: CandidateEvaluation }) {
         )}
       </td>
 
-      {/* 7. Actions */}
+      {/* 7. Recruiter decision — final HUMAN judgment, separate from the
+          system recommendation above and never overwriting it */}
+      <td className="px-4 py-3">
+        {editing ? (
+          <div className="min-w-[220px] space-y-2" aria-label={`Decision editor for ${candidate.candidate_name || candidate.attempt_id}`}>
+            <select
+              value={draftDecision}
+              onChange={(e) => setDraftDecision(e.target.value as RecruiterDecisionValue)}
+              aria-label="Recruiter decision"
+              className="w-full px-2.5 py-1.5 rounded-lg border border-white/[0.08] bg-[#1e2638] text-xs text-white outline-none focus:border-[#6366f1]/50"
+            >
+              {RECRUITER_DECISIONS.map((d) => (
+                <option key={d} value={d}>
+                  {d}
+                </option>
+              ))}
+            </select>
+            <textarea
+              value={draftNotes}
+              onChange={(e) => setDraftNotes(e.target.value)}
+              rows={3}
+              maxLength={5000}
+              placeholder="Review notes (evidence, rationale)…"
+              aria-label="Recruiter notes"
+              className="w-full px-2.5 py-1.5 rounded-lg border border-white/[0.08] bg-[#1e2638] text-xs text-white placeholder:text-slate-500 outline-none focus:border-[#6366f1]/50 resize-y"
+            />
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={savingDecision}
+                onClick={handleSaveDecision}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#6366f1] text-xs font-semibold text-white hover:bg-[#4f52e0] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {savingDecision && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {savingDecision ? "Saving…" : "Save decision"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setEditing(false)}
+                className="px-3 py-1.5 rounded-lg border border-white/[0.08] bg-[#1e2638] text-xs font-medium text-slate-300 hover:text-white transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <span
+              className={cn(
+                "inline-flex px-2.5 py-1 text-xs font-semibold rounded-full border",
+                DECISION_TONE[candidate.recruiter_decision ?? "PENDING"]
+              )}
+              title={candidate.recruiter_notes ?? undefined}
+            >
+              {candidate.recruiter_decision ?? "PENDING"}
+            </span>
+            {candidate.recruiter_notes ? (
+              <p className="text-[11px] text-slate-500 mt-1.5 max-w-[220px] break-words line-clamp-2">
+                {candidate.recruiter_notes}
+              </p>
+            ) : null}
+            <p className="text-[11px] text-slate-500 mt-1.5">
+              {candidate.reviewed_at ? `Reviewed ${formatDate(candidate.reviewed_at)}` : "Not reviewed yet"}
+            </p>
+            <button
+              type="button"
+              onClick={startEditing}
+              className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/[0.08] bg-[#1e2638] text-xs font-medium text-slate-200 hover:border-[#6366f1]/50 hover:text-white transition-colors"
+            >
+              <Gavel className="h-3.5 w-3.5" />
+              Decide
+            </button>
+          </>
+        )}
+      </td>
+
+      {/* 8. Actions */}
       <td className="px-4 py-3">
         <div className="flex flex-col gap-2">
           <button
@@ -233,6 +361,13 @@ export default function EvaluationSection() {
   const [sortDir, setSortDir] = useState<SortDir>("asc")
 
   const candidates = data?.candidates ?? []
+
+  const decisionMutation = useSetRecruiterDecision(examId || "")
+  const saveDecision = useCallback(
+    async (attemptId: string, decision: RecruiterDecisionValue, notes: string | null) =>
+      decisionMutation.mutateAsync({ attemptId, payload: { decision, notes } }),
+    [decisionMutation]
+  )
 
   const rows = useMemo(
     () =>
@@ -289,7 +424,10 @@ export default function EvaluationSection() {
             </div>
             <p className="text-xs text-slate-500 max-w-sm text-right">
               System recommendations are automated decision support, not a final
-              hiring decision.
+              hiring decision. The{" "}
+              <span className="text-slate-300 font-medium">Recruiter Decision</span>{" "}
+              is the final human judgment — it never alters the System
+              Recommendation.
             </p>
           </div>
 
@@ -413,7 +551,7 @@ export default function EvaluationSection() {
               />
             ) : (
               <div className="rounded-xl border border-white/[0.07] bg-[#161b27] overflow-x-auto">
-                <table className="w-full text-sm min-w-[980px]">
+                <table className="w-full text-sm min-w-[1160px]">
                   <thead>
                     <tr className="border-b border-white/[0.08]">
                       <th className="px-4 py-3 text-left">
@@ -425,6 +563,9 @@ export default function EvaluationSection() {
                       <th className={STATIC_TH}>Performance</th>
                       <th className="px-4 py-3 text-left">
                         <SortHeader label="System Recommendation" active={sortKey === "recommendation"} dir={sortDir} onClick={() => toggleSort("recommendation")} />
+                      </th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
+                        Recruiter Decision
                       </th>
                       <th className="px-4 py-3 text-left">
                         <SortHeader label="Risk" active={sortKey === "risk"} dir={sortDir} onClick={() => toggleSort("risk")} />
@@ -439,7 +580,7 @@ export default function EvaluationSection() {
                   </thead>
                   <tbody>
                     {rows.map((candidate) => (
-                      <EvaluationRow key={candidate.attempt_id} candidate={candidate} />
+                      <EvaluationRow key={candidate.attempt_id} candidate={candidate} onSaveDecision={saveDecision} />
                     ))}
                   </tbody>
                 </table>

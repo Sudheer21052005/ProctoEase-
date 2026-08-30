@@ -20,7 +20,7 @@ from app.core.exceptions import (
     AttemptAlreadySubmitted,
     BadRequest,
 )
-from app.models.attempt import ExamAttempt, AttemptStatus
+from app.models.attempt import ExamAttempt, AttemptStatus, RecruiterDecision
 from app.models.user import User
 from app.services.exam_service import get_exam
 from app.services import proctoring_image_service
@@ -187,3 +187,42 @@ async def list_exam_attempts(
         setattr(attempt, "candidate_email", email_by_id.get(attempt.candidate_id))
 
     return attempts
+
+
+async def set_recruiter_decision(
+    db: AsyncSession,
+    attempt_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+    decision: RecruiterDecision,
+    notes: str | None,
+    reviewer: User,
+) -> ExamAttempt:
+    """
+    Persist the final HUMAN recruiter decision on one attempt (Phase D).
+
+    Tenant-scoped: raises AttemptNotFound when the attempt does not exist for
+    the reviewer's tenant (cross-tenant access is indistinguishable from a
+    missing attempt). PUT semantics — the whole decision record is written:
+    notes are replaced (None clears them) and reviewed_by/reviewed_at are
+    refreshed on every save.
+
+    The Phase B system recommendation is derived at read time from persisted
+    ground truth and is deliberately untouched by this method.
+    """
+    result = await db.execute(
+        select(ExamAttempt).where(
+            ExamAttempt.id == attempt_id,
+            ExamAttempt.tenant_id == tenant_id,
+            ExamAttempt.is_active == True,  # noqa: E712
+        )
+    )
+    attempt = result.scalar_one_or_none()
+    if attempt is None:
+        raise AttemptNotFound()
+
+    attempt.recruiter_decision = decision.value
+    attempt.recruiter_notes = notes
+    attempt.reviewed_by = reviewer.id
+    attempt.reviewed_at = datetime.now(timezone.utc)
+    await db.flush()
+    return attempt

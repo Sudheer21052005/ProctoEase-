@@ -77,6 +77,14 @@ class CandidateEvaluation(BaseModel):
     # System recommendation (deterministic 7-rule engine)
     recommendation: RecommendationOut
 
+    # ── Phase D: human recruiter decision (separate from the recommendation;
+    # never overwrites it). NULL decision = never reviewed (UI renders
+    # PENDING). Values: PENDING | SHORTLISTED | REVIEW | REJECTED.
+    recruiter_decision: str | None = None
+    recruiter_notes: str | None = None
+    reviewed_by: uuid.UUID | None = None
+    reviewed_at: datetime | None = None
+
 
 class ExamEvaluationResponse(BaseModel):
     """Exam-wide evaluation envelope with one entry per attempt."""

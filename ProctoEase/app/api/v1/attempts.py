@@ -16,7 +16,12 @@ from app.core.dependencies import require_role
 from app.core.limiter import limiter
 from app.models.attempt import ExamAttempt
 from app.models.user import User, UserRole
-from app.schemas.attempt import AttemptRead, AttemptCreate
+from app.schemas.attempt import (
+    AttemptRead,
+    AttemptCreate,
+    RecruiterDecisionRead,
+    RecruiterDecisionUpdate,
+)
 from app.schemas.answer import BulkAnswerSubmit, AnswersResponse
 from app.schemas.reporting import PaginatedResponse
 from app.services import attempt_service, answer_service
@@ -192,6 +197,46 @@ async def list_exam_attempts_paged(
     """Paginated attempts for an exam (Recruiter/Admin only)."""
     attempts = await attempt_service.list_exam_attempts(db, exam_id, user.tenant_id)
     return _paginate(attempts, page, page_size)
+
+
+# ── Recruiter: Set final human decision (Phase D) ───────────────
+
+
+@router.put(
+    "/attempts/{attempt_id}/recruiter-decision",
+    response_model=RecruiterDecisionRead,
+    summary="Set recruiter decision",
+)
+async def set_recruiter_decision(
+    attempt_id: uuid.UUID,
+    payload: RecruiterDecisionUpdate,
+    user: User = Depends(require_role(UserRole.RECRUITER, UserRole.ADMIN)),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Persist the recruiter's FINAL HUMAN decision (PENDING / SHORTLISTED /
+    REVIEW / REJECTED) plus evidence notes for one attempt.
+
+    This is the authoritative human judgment and is stored separately from
+    the automated system recommendation, which it never overwrites.
+    Recruiter/Admin only; strictly tenant-scoped.
+    """
+    attempt = await attempt_service.set_recruiter_decision(
+        db,
+        attempt_id,
+        user.tenant_id,
+        payload.decision,
+        payload.notes,
+        reviewer=user,
+    )
+    return RecruiterDecisionRead(
+        attempt_id=attempt.id,
+        decision=attempt.recruiter_decision,
+        notes=attempt.recruiter_notes,
+        reviewed_by=attempt.reviewed_by,
+        reviewed_by_email=user.email,
+        reviewed_at=attempt.reviewed_at,
+    )
 
 
 @router.post(
