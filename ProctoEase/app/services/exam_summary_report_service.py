@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import uuid
 from collections import Counter
-from datetime import datetime, timezone
 from statistics import median
 from typing import Any, Mapping
 
@@ -183,70 +182,15 @@ def recruiter_decision_distribution(candidates: list[dict]) -> list[tuple[str, i
 
 
 class _SummaryReportPDF(IntegrityReportPDF):
-    """IntegrityReportPDF with the exam-wide summary's own header, footer,
-    stat blocks and colored distribution primitives."""
+    """Exam-Wide Evaluation Summary.
 
-    def __init__(self):
-        super().__init__()
-        self.generated_at_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    Page furniture (navy header/footer/section titles/stat blocks) is inherited
+    from the shared IntegrityReportPDF base via the report_title attribute —
+    one styling system for every ProctoEase report. Only the distribution
+    bars are summary-specific."""
 
-    # Exam-wide document title (overrides the inherited integrity-report header).
-    def header(self):
-        self.set_font(self.default_font, "B", 15)
-        self.set_text_color(*NAVY)
-        self.cell(0, 10, self.clean_text("Exam-Wide Evaluation Summary"), align="C", new_x="LMARGIN", new_y="NEXT")
-        self.set_text_color(*INK)
-        self.set_draw_color(*NAVY)
-        self.set_line_width(0.5)
-        self.line(self.l_margin, self.get_y(), self.l_margin + self.epw, self.get_y())
-        self.set_line_width(0.2)
-        self.ln(5)
-
-    def footer(self):
-        self.set_y(-18)
-        self.set_font(self.default_font, "", 7.5)
-        self.set_text_color(*MUTED)
-        self.cell(0, 4, self.clean_text("ProctoEase — Exam-Wide Evaluation Summary"), align="L", new_x="LMARGIN", new_y="NEXT")
-        self.cell(95, 4, self.clean_text(f"Generated {self.generated_at_utc} UTC"), align="L")
-        self.set_font(self.default_font, "B", 7.5)
-        self.cell(0, 4, self.clean_text("CONFIDENTIAL — Recruiter Use Only"), align="R", new_x="LMARGIN", new_y="NEXT")
-        self.set_font(self.default_font, "", 7.5)
-        self.cell(0, 4, f"Page {self.page_no()}/{{nb}}", align="C")
-        self.set_text_color(*INK)
-
-    def section_title(self, title: str):
-        self.ensure_space(SECTION_MIN_SPACE)
-        self.set_font(self.default_font, "B", 11.5)
-        self.set_text_color(*NAVY)
-        self.set_fill_color(*NAVY_FILL)
-        self.cell(0, 7.5, self.clean_text(title), fill=True, new_x="LMARGIN", new_y="NEXT")
-        self.set_text_color(*INK)
-        self.ln(2)
-
-    def stat_block(self, pairs: list[tuple[str, str]]):
-        """Compact 3-per-row stat boxes: small-caps label over a bold value."""
-        gap = 4.0
-        box_w = (self.epw - 2 * gap) / 3
-        box_h = 14.0
-        for start in range(0, len(pairs), 3):
-            row = pairs[start:start + 3]
-            self.ensure_space(box_h + 3)
-            x0 = self.l_margin
-            for label, value in row:
-                self.set_fill_color(*NAVY_FILL)
-                self.set_draw_color(148, 163, 205)
-                self.rect(x0, self.get_y(), box_w, box_h, style="FD")
-                self.set_xy(x0 + 2.5, self.get_y() + 2)
-                self.set_font(self.default_font, "", 6.5)
-                self.set_text_color(*MUTED)
-                self.cell(box_w - 5, 3, self.clean_text(label.upper()), align="L", new_x="LMARGIN", new_y="NEXT")
-                self.set_x(x0 + 2.5)
-                self.set_font(self.default_font, "B", 11)
-                self.set_text_color(*INK)
-                self.cell(box_w - 5, 6, self.clean_text(value), align="L")
-                x0 += box_w + gap
-            self.set_y(self.get_y() + box_h + 3)
-        self.set_text_color(*INK)
+    report_title = "Exam-Wide Evaluation Summary"
+    report_subtitle = None
 
     def distribution_bars(
         self,

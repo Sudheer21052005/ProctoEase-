@@ -438,6 +438,40 @@ class TestIntegrityReportPDF:
         assert len(pdf_bytes) > 1000
 
     @pytest.mark.asyncio
+    async def test_pdf_polish_branding_present(self, sample_user, sample_candidate, sample_attempt, sample_exam,
+                                                sample_risk_score, sample_events, sample_questions, sample_code_submissions):
+        """Phase G: navy header with subtitle and the branded confidential footer."""
+        from PyPDF2 import PdfReader
+        import io
+
+        mock_db = AsyncMock()
+        mock_db.execute.side_effect = [
+            make_mock_result(scalar_one=sample_attempt),
+            make_mock_result(scalar_one=sample_candidate),
+            make_mock_result(scalar_one=sample_exam),
+            make_mock_result(scalars_all=sample_events),
+            make_mock_result(scalars_all=sample_questions),
+            make_mock_result(scalars_all=sample_code_submissions),
+        ]
+        with patch("app.services.risk_engine.get_risk_score", new_callable=AsyncMock) as g,              patch("app.services.risk_engine.compute_risk", new_callable=AsyncMock) as c:
+            g.return_value = sample_risk_score
+            c.return_value = sample_risk_score
+            pdf_bytes = await integrity_report_service.generate_integrity_report_pdf(
+                mock_db, sample_attempt.id, sample_user.tenant_id
+            )
+
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        text = "".join((p.extract_text() or "") for p in reader.pages)
+        flat = "".join(text.split())
+        assert "Candidate Integrity Report" in text        # individual title kept
+        assert "Candidate Proctoring & Integrity Assessment" in text  # subtitle
+        assert "ProctoEase — Candidate Integrity Report" in text
+        assert "CONFIDENTIAL — Recruiter Use Only" in text
+        assert "Generated " in text and "UTC" in text
+        assert "Page 1/" in text
+        assert "Risk Level: MEDIUM" in text or "Risk Level: MEDIUM" in flat.replace("RiskLevel:", "Risk Level:")
+
+    @pytest.mark.asyncio
     async def test_pdf_content_sanity(
         self, sample_user, sample_candidate, sample_attempt, sample_exam,
         sample_risk_score, sample_events, sample_questions, sample_code_submissions

@@ -70,12 +70,58 @@ SNAPSHOT_ROW_GAP = 6.0       # vertical gap between snapshot rows (mm)
 SNAPSHOT_RENDER_DPI = 200    # print-quality ceiling for the temp downsampled copy
 SNAPSHOT_JPEG_QUALITY = 85   # temp-copy JPEG quality (visually lossless; not aggressive)
 
+# ── Shared ProctoEase reporting palette (Phase G; mirrors Phase F) ───────────
+# Restrained: navy = structure; green/amber/red = severity semantics only.
+NAVY = (30, 58, 138)
+NAVY_FILL = (219, 228, 246)
+TABLE_HEADER_FILL = (60, 76, 150)   # navy table header, white text
+INK = (31, 41, 55)
+MUTED = (107, 114, 128)
+GREEN_FILL = (209, 250, 229)
+AMBER_FILL = (254, 243, 199)
+RED_FILL = (254, 202, 202)
+GRAY_FILL = (243, 244, 246)
+
+
+def severity_fill(severity: int | None) -> tuple[int, int, int] | None:
+    """Semantic tint for a violation severity (1 low / 2 medium / 3+ high-critical)."""
+    if severity is None:
+        return GRAY_FILL
+    if severity <= 1:
+        return GRAY_FILL
+    if severity == 2:
+        return AMBER_FILL
+    return RED_FILL
+
+
+def risk_level_fill(level: str | None) -> tuple[int, int, int]:
+    """Semantic tint for a persisted risk level (neutral for unknown/none)."""
+    value = (level or "").lower()
+    if value == "low":
+        return GREEN_FILL
+    if value == "medium":
+        return AMBER_FILL
+    if value == "high":
+        return AMBER_FILL
+    if value == "critical":
+        return RED_FILL
+    return GRAY_FILL
+
 
 class IntegrityReportPDF(FPDF):
-    """Custom PDF class for integrity report with Unicode support."""
+    """Custom PDF class for integrity report with Unicode support.
+
+    Page furniture (header/footer/section titles/table headers) implements the
+    shared ProctoEase reporting language: subclasses may retitle the report via
+    the ``report_title`` / ``report_subtitle`` class attributes (Phase F's
+    Exam-Wide Evaluation Summary reuses the same furniture)."""
+
+    report_title: str = "Candidate Integrity Report"
+    report_subtitle: str | None = None
 
     def __init__(self):
         super().__init__()
+        self.generated_at_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         # Add Unicode fonts if present
         if DEJAVU_REGULAR.exists():
             self.add_font("DejaVu", "", str(DEJAVU_REGULAR))
@@ -112,15 +158,31 @@ class IntegrityReportPDF(FPDF):
     # ── Page furniture ────────────────────────────────────────────────
 
     def header(self):
-        self.set_font(self.default_font, "B", 14)
-        self.cell(0, 10, self.clean_text("Candidate Integrity Report"), align="C", new_x="LMARGIN", new_y="NEXT")
+        self.set_font(self.default_font, "B", 15)
+        self.set_text_color(*NAVY)
+        self.cell(0, 9, self.clean_text(self.report_title), align="C", new_x="LMARGIN", new_y="NEXT")
+        if self.report_subtitle:
+            self.set_font(self.default_font, "", 8.5)
+            self.set_text_color(*MUTED)
+            self.cell(0, 4, self.clean_text(self.report_subtitle), align="C", new_x="LMARGIN", new_y="NEXT")
+        self.set_text_color(*INK)
+        self.set_draw_color(*NAVY)
+        self.set_line_width(0.5)
         self.line(self.l_margin, self.get_y(), self.l_margin + self.epw, self.get_y())
-        self.ln(5)
+        self.set_line_width(0.2)
+        self.ln(4)
 
     def footer(self):
-        self.set_y(-15)
-        self.set_font(self.default_font, "I", 8)
-        self.cell(0, 10, f"Page {self.page_no()}/{{nb}}", align="C")
+        self.set_y(-18)
+        self.set_font(self.default_font, "", 7.5)
+        self.set_text_color(*MUTED)
+        self.cell(0, 4, self.clean_text(f"ProctoEase — {self.report_title}"), align="L", new_x="LMARGIN", new_y="NEXT")
+        self.cell(95, 4, self.clean_text(f"Generated {self.generated_at_utc} UTC"), align="L")
+        self.set_font(self.default_font, "B", 7.5)
+        self.cell(0, 4, self.clean_text("CONFIDENTIAL — Recruiter Use Only"), align="R", new_x="LMARGIN", new_y="NEXT")
+        self.set_font(self.default_font, "", 7.5)
+        self.cell(0, 4, f"Page {self.page_no()}/{{nb}}", align="C")
+        self.set_text_color(*INK)
 
     # ── Layout primitives ─────────────────────────────────────────────
 
@@ -146,9 +208,11 @@ class IntegrityReportPDF(FPDF):
         larger, so a heading whose first item cannot fit breaks to the next
         page together with that item instead of orphaning."""
         self.ensure_space(max(SECTION_MIN_SPACE, SECTION_TITLE_H + keep_with_next))
-        self.set_font(self.default_font, "B", 12)
-        self.set_fill_color(230, 230, 230)
+        self.set_font(self.default_font, "B", 11.5)
+        self.set_text_color(*NAVY)
+        self.set_fill_color(*NAVY_FILL)
         self.cell(0, 8, self.clean_text(title), fill=True, new_x="LMARGIN", new_y="NEXT")
+        self.set_text_color(*INK)
         self.ln(2)
 
     def key_value(self, key: str, value: str):
@@ -158,6 +222,47 @@ class IntegrityReportPDF(FPDF):
         self.set_font(self.default_font, "", 10)
         # multi_cell: long exam titles / emails wrap instead of spilling
         self.multi_cell(self.epw - key_w, LINE_H, self.clean_text(value), new_x="LMARGIN", new_y="NEXT")
+
+    def stat_block(self, pairs: list[tuple[str, str]]):
+        """Compact 3-per-row stat boxes: small-caps label over a bold value."""
+        gap = 4.0
+        box_w = (self.epw - 2 * gap) / 3
+        box_h = 14.0
+        for start in range(0, len(pairs), 3):
+            row = pairs[start:start + 3]
+            self.ensure_space(box_h + 3)
+            x0 = self.l_margin
+            for label, value in row:
+                self.set_fill_color(*NAVY_FILL)
+                self.set_draw_color(148, 163, 205)
+                self.rect(x0, self.get_y(), box_w, box_h, style="FD")
+                self.set_xy(x0 + 2.5, self.get_y() + 2)
+                self.set_font(self.default_font, "", 6.5)
+                self.set_text_color(*MUTED)
+                self.cell(box_w - 5, 3, self.clean_text(label.upper()), align="L", new_x="LMARGIN", new_y="NEXT")
+                self.set_x(x0 + 2.5)
+                self.set_font(self.default_font, "B", 11)
+                self.set_text_color(*INK)
+                self.cell(box_w - 5, 6, self.clean_text(value), align="L")
+                x0 += box_w + gap
+            self.set_y(self.get_y() + box_h + 3)
+        self.set_text_color(*INK)
+
+    def key_value_semantic(self, key: str, value: str, fill: tuple[int, int, int]):
+        """key_value whose value is a bold chip tinted with a semantic fill
+        (risk level, pass/fail). Value text colour stays INK; the tint alone
+        carries the meaning."""
+        key_w = 60.0
+        self.set_font(self.default_font, "B", 10)
+        self.cell(key_w, LINE_H + 2, self.clean_text(key))
+        self.set_fill_color(*fill)
+        value_w = 40.0
+        self.set_x(self.l_margin + key_w)
+        self.cell(value_w, LINE_H + 2, self.clean_text(value), fill=True, align="C")
+        self.set_text_color(*INK)
+        self.set_x(self.l_margin + key_w + value_w + 3)
+        self.set_font(self.default_font, "", 10)
+        self.cell(0, LINE_H + 2, "", new_x="LMARGIN", new_y="NEXT")
 
     def callout(self, text: str):
         """Bordered, tinted single-block notice (e.g. snapshot fallback)."""
@@ -192,12 +297,14 @@ class IntegrityReportPDF(FPDF):
 
         def render_header_row():
             self.set_font(self.default_font, "B", 9)
-            self.set_fill_color(200, 200, 200)
+            self.set_text_color(255, 255, 255)
+            self.set_fill_color(*TABLE_HEADER_FILL)
             h_lines = max(self._measure_lines(h, widths[i]) for i, h in enumerate(headers))
             row_h = h_lines * LINE_H + CELL_PAD
             x0, y0 = self.get_x(), self.get_y()
             for i, header in enumerate(headers):
                 self.multi_cell(widths[i], LINE_H, self.clean_text(header), border=1, fill=True, align="C", new_x="RIGHT", new_y="TOP")
+            self.set_text_color(*INK)
             self.set_xy(x0, y0 + row_h)
 
         def render_row(row: list[str], fill: bool):
@@ -434,6 +541,16 @@ class IntegrityReportPDF(FPDF):
         self.multi_cell(w, LINE_H, self.clean_text(content), border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
 
 
+def _tint_cell(pdf: "IntegrityReportPDF", x: float, y: float, w: float, h: float, fill: tuple[int, int, int] | None):
+    """Paint a translucent semantic tint over an already-rendered table cell;
+    cell text stays readable through the fill (cells render before the hook)."""
+    if fill is None:
+        return
+    with pdf.local_context(fill_opacity=0.45):
+        pdf.set_fill_color(*fill)
+        pdf.rect(x, y, w, h, style="F")
+
+
 async def generate_integrity_report_pdf(
     db: AsyncSession,
     attempt_id: uuid.UUID,
@@ -511,6 +628,7 @@ async def generate_integrity_report_pdf(
 
     # 7. Build PDF
     pdf = IntegrityReportPDF()
+    pdf.report_subtitle = "Candidate Proctoring & Integrity Assessment"
     pdf.alias_nb_pages()
     pdf.set_auto_page_break(auto=True, margin=20)
     pdf.add_page()
@@ -523,12 +641,27 @@ async def generate_integrity_report_pdf(
     pdf.key_value("Submitted At:", attempt.submitted_at.strftime("%Y-%m-%d %H:%M:%S UTC") if attempt.submitted_at else "Not submitted")
     pdf.key_value("Duration:", f"{(attempt.submitted_at - attempt.started_at).total_seconds() / 60:.1f} minutes" if attempt.submitted_at and attempt.started_at else "N/A")
     pdf.key_value("Tenant:", str(tenant_id))
-    pdf.ln(3)
+    pdf.ln(1)
+    pdf.stat_block(
+        [
+            ("Status", attempt.status.title() if attempt.status else "—"),
+            (
+                "Duration",
+                (
+                    f"{(attempt.submitted_at - attempt.started_at).total_seconds() / 60:.1f} min"
+                    if attempt.submitted_at and attempt.started_at
+                    else "N/A"
+                ),
+            ),
+            ("Total Events", str(risk_score.total_events)),
+        ]
+    )
+    pdf.ln(1)
 
     # ---- Risk Summary ----
     pdf.section_title("Risk Summary")
     pdf.key_value("Overall Score:", f"{risk_score.overall_score:.4f}")
-    pdf.key_value("Risk Level:", risk_score.risk_level.upper())
+    pdf.key_value_semantic("Risk Level:", risk_score.risk_level.upper(), risk_level_fill(risk_score.risk_level))
     pdf.key_value("Total Events:", str(risk_score.total_events))
     pdf.ln(2)
     pdf.set_font(pdf.default_font, "B", 10)
@@ -548,7 +681,14 @@ async def generate_integrity_report_pdf(
             time_str = ev.created_at.strftime("%H:%M:%S")
             desc = ev.detail.get("description", "") if ev.detail else ""
             rows.append([time_str, ev.event_type, str(ev.severity), desc])
-        pdf.add_table(headers, rows, col_ratios=[30, 40, 20, 100], aligns=["L", "L", "C", "L"])
+        pdf.add_table(
+            headers, rows,
+            col_ratios=[30, 40, 20, 100], aligns=["L", "L", "C", "L"],
+            cell_style=lambda i, x, y, w, h, row: (
+                _tint_cell(pdf, x, y, w, h, severity_fill(int(row[2]) if row[2].isdigit() else None))
+                if i == 2 else None
+            ),
+        )
     else:
         pdf.set_font(pdf.default_font, "I", 10)
         pdf.cell(0, 6, "No violations recorded.", new_x="LMARGIN", new_y="NEXT")
@@ -597,11 +737,16 @@ async def generate_integrity_report_pdf(
                     f"{points}/{q.points}"
                 ])
     if objective_rows:
+        result_tints = {"Correct": GREEN_FILL, "Incorrect": RED_FILL, "Ungraded": GRAY_FILL}
         pdf.add_table(
             ["Question", "Type", "Selected", "Result", "Score"],
             objective_rows,
             col_ratios=[70, 25, 45, 25, 25],
             aligns=["L", "L", "L", "C", "C"],
+            cell_style=lambda i, x, y, w, h, row: (
+                _tint_cell(pdf, x, y, w, h, result_tints.get(row[3]))
+                if i == 3 else None
+            ),
         )
     else:
         pdf.set_font(pdf.default_font, "I", 10)
@@ -627,11 +772,16 @@ async def generate_integrity_report_pdf(
                     f"{points}/{q.points}"
                 ])
     if code_rows:
+        code_result_tints = {"Passed": GREEN_FILL, "Failed": RED_FILL, "Ungraded": GRAY_FILL}
         pdf.add_table(
             ["Question", "Language", "Result", "Score"],
             code_rows,
             col_ratios=[60, 30, 30, 30],
             aligns=["L", "L", "C", "C"],
+            cell_style=lambda i, x, y, w, h, row: (
+                _tint_cell(pdf, x, y, w, h, code_result_tints.get(row[2]))
+                if i == 2 else None
+            ),
         )
     else:
         pdf.set_font(pdf.default_font, "I", 10)
