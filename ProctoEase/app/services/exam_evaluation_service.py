@@ -259,6 +259,10 @@ async def get_exam_evaluation(
     coding_max = sum(q.points for q in questions if q.question_type == CODE_TYPE)
     max_score = objective_max + coding_max
 
+    # Phase F: exam-wide violation-type histogram (empty until the grouped
+    # rows are regrouped below; the early-return empty path uses the empty dict).
+    violation_type_histogram: dict[str, int] = {}
+
     def _envelope(candidates: list[dict]) -> dict:
         return {
             "exam_id": exam.id,
@@ -270,6 +274,8 @@ async def get_exam_evaluation(
             "passing_score_pct": PASSING_SCORE_PCT,
             "borderline_max_pct": BORDERLINE_MAX_PCT,
             "excellence_score_pct": EXCELLENCE_SCORE_PCT,
+            # Phase F: additive, backwards-compatible (empty dict for empty exams).
+            "violation_type_histogram": violation_type_histogram,
             "candidates": candidates,
         }
 
@@ -319,6 +325,20 @@ async def get_exam_evaluation(
         events_by_attempt[attempt_id_val].append(
             (event_type, count, max_severity if max_severity is not None else 1)
         )
+
+    # Phase F: exam-wide violation-type histogram, regrouped IN MEMORY from
+    # the SAME grouped rows above (no extra query). Same reportability rule as
+    # the per-candidate evidence counts: benign non-gating types excluded.
+    histogram: dict[str, int] = defaultdict(int)
+    for event_type, count, _max_severity in (
+        row for rows in events_by_attempt.values() for row in rows
+    ):
+        if event_type in NON_GATING_VIOLATIONS:
+            continue
+        histogram[event_type] += count
+    violation_type_histogram = dict(
+        sorted(histogram.items(), key=lambda kv: (-kv[1], kv[0]))
+    )
 
     candidates: list[dict] = []
     for att in attempts:

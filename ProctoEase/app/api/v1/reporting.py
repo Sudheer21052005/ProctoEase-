@@ -27,6 +27,7 @@ from app.services import (
     integrity_report_service,
     exam_evaluation_service,
     exam_evaluation_excel_service,
+    exam_summary_report_service,
 )
 
 router = APIRouter(tags=["Reporting"])
@@ -118,6 +119,46 @@ async def export_candidate_evaluations_excel(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
+        },
+    )
+
+
+# ── Exam-Wide Summary Report PDF (Phase F) ────────────────────────
+
+
+@router.get(
+    "/exams/{exam_id}/summary-report/pdf",
+    summary="Download exam-wide summary report as PDF",
+)
+async def download_exam_summary_report_pdf(
+    exam_id: uuid.UUID,
+    user: User = Depends(require_role(UserRole.RECRUITER, UserRole.ADMIN)),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Download an exam-wide recruiter summary PDF: overview, completion and
+    score statistics, distributions (risk / system recommendation / recruiter
+    decision), top violation types, and the candidate roster.
+
+    A pure rendering of the canonical evaluation payload — risk and the
+    system recommendation are never recalculated. Recruiter / Admin only;
+    strictly tenant-scoped.
+    """
+    pdf_bytes = await exam_summary_report_service.generate_exam_summary_report_pdf(
+        db, exam_id, user.tenant_id
+    )
+
+    filename = (
+        f"summary_report_{exam_id}_"
+        f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.pdf"
+    )
+
+    return StreamingResponse(
+        iter([pdf_bytes]),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(pdf_bytes)),
         },
     )
 

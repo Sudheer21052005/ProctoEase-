@@ -198,6 +198,24 @@ export const reportingApi = {
     window.URL.revokeObjectURL(url)
   },
 
+  // Phase F: exam-wide summary PDF — always the COMPLETE exam dataset
+  // (canonical backend evaluation), independent of any UI filters.
+  exportExamSummaryPdf: async (examId: string) => {
+    const response = await api.get(`/exams/${examId}/summary-report/pdf`, {
+      responseType: "blob",
+    })
+    const url = window.URL.createObjectURL(
+      new Blob([response.data], { type: "application/pdf" })
+    )
+    const link = document.createElement("a")
+    link.href = url
+    link.setAttribute("download", `summary_report_${examId}.pdf`)
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.URL.revokeObjectURL(url)
+  },
+
   exportExamCsv: async (examId: string) => {    const response = await api.get(`/exams/${examId}/export/csv`, {
       responseType: "blob",
     })

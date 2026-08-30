@@ -34,6 +34,7 @@ vi.mock("@/api/reporting.api", () => ({
   reportingApi: {
     downloadIntegrityReportPdf: vi.fn(),
     exportCandidateEvaluationsExcel: vi.fn(),
+    exportExamSummaryPdf: vi.fn(),
   },
 }))
 
@@ -453,5 +454,73 @@ describe("EvaluationSection — recruiter decision (Phase D)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
     expect(screen.queryByLabelText("Recruiter decision")).not.toBeInTheDocument()
     expect(mutateAsync).not.toHaveBeenCalled()
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase F — Summary PDF export
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("EvaluationSection — Summary PDF (Phase F)", () => {
+  it("F1. renders the Summary PDF button beside Export Excel and calls the API with the exam id, toasting success", async () => {
+    const summaryMock = vi.mocked(reportingApi.exportExamSummaryPdf)
+    summaryMock.mockResolvedValueOnce(undefined)
+    mockHookReturn.data = makeResponse([makeCandidate()])
+    renderSection()
+
+    expect(screen.getByRole("button", { name: "Export summary report PDF" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Export candidate evaluations Excel" })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Export summary report PDF" }))
+    await vi.waitFor(() => expect(summaryMock).toHaveBeenCalledExactlyOnceWith("exam-1"))
+    await vi.waitFor(() => expect(toastSuccess).toHaveBeenCalledWith("Summary report downloaded."))
+    expect(toastError).not.toHaveBeenCalled()
+  })
+
+  it("F2. shows the exporting spinner while the request is in flight", async () => {
+    const summaryMock = vi.mocked(reportingApi.exportExamSummaryPdf)
+    let resolveExport: () => void
+    summaryMock.mockImplementationOnce(
+      () => new Promise<void>((resolve) => { resolveExport = resolve })
+    )
+    mockHookReturn.data = makeResponse([makeCandidate()])
+    renderSection()
+
+    fireEvent.click(screen.getByRole("button", { name: "Export summary report PDF" }))
+    expect(await screen.findByText("Exporting…")).toBeInTheDocument()
+    const btn = screen.getByRole("button", { name: "Export summary report PDF" })
+    expect(btn).toBeDisabled()
+
+    resolveExport!()
+    await vi.waitFor(() => expect(btn).toBeEnabled())
+  })
+
+  it("F3. failure surfaces an error toast", async () => {
+    const summaryMock = vi.mocked(reportingApi.exportExamSummaryPdf)
+    summaryMock.mockRejectedValueOnce(new Error("Unable to download the summary report."))
+    mockHookReturn.data = makeResponse([makeCandidate()])
+    renderSection()
+
+    fireEvent.click(screen.getByRole("button", { name: "Export summary report PDF" }))
+    await vi.waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith("Unable to download the summary report.")
+    )
+    expect(toastSuccess).not.toHaveBeenCalled()
+  })
+
+  it("F4. summary export remains exam-wide even when UI filters are active", async () => {
+    const summaryMock = vi.mocked(reportingApi.exportExamSummaryPdf)
+    summaryMock.mockResolvedValueOnce(undefined)
+    mockHookReturn.data = makeResponse([
+      makeCandidate(),
+      makeCandidate({ attempt_id: "attempt-BBB", candidate_name: "Grace Hopper", candidate_email: "grace@navy.mil" }),
+    ])
+    renderSection()
+
+    fireEvent.change(screen.getByLabelText("Search candidates"), { target: { value: "Grace" } })
+    expect(screen.queryByText("Ada Lovelace")).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Export summary report PDF" }))
+    await vi.waitFor(() => expect(summaryMock).toHaveBeenCalledExactlyOnceWith("exam-1"))
   })
 })
