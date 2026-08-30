@@ -26,6 +26,7 @@ from app.services import (
     reporting_service,
     integrity_report_service,
     exam_evaluation_service,
+    exam_evaluation_excel_service,
 )
 
 router = APIRouter(tags=["Reporting"])
@@ -76,6 +77,48 @@ async def exam_analytics(
     """
     return await reporting_service.get_exam_analytics(
         db, exam_id, user.tenant_id
+    )
+
+
+# ── Candidate Evaluations Excel Export (Phase E) ─────────────────
+
+
+@router.get(
+    "/exams/{exam_id}/candidate-evaluations/excel",
+    summary="Export exam-wide candidate evaluations as Excel",
+)
+async def export_candidate_evaluations_excel(
+    exam_id: uuid.UUID,
+    user: User = Depends(require_role(UserRole.RECRUITER, UserRole.ADMIN)),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Download the exam-wide candidate evaluation as an XLSX workbook.
+
+    The workbook is a pure rendering of the canonical evaluation payload
+    (Phase B service): identity, status/timing, score breakdown, persisted
+    risk, violation severity counts, the deterministic system recommendation
+    AND the Phase D human recruiter decision — clearly separated. Read-only;
+    risk is never recomputed. Recruiter / Admin only; strictly tenant-scoped.
+    """
+    evaluation = await exam_evaluation_service.get_exam_evaluation(
+        db, exam_id, user.tenant_id
+    )
+    xlsx_bytes, _row_count = exam_evaluation_excel_service.build_evaluation_workbook(
+        evaluation
+    )
+
+    filename = (
+        f"candidate_evaluations_{exam_id}_"
+        f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.xlsx"
+    )
+
+    return StreamingResponse(
+        iter([xlsx_bytes]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        },
     )
 
 

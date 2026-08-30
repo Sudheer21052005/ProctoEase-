@@ -19,3 +19,4 @@ redis[hiredis]>=5.0.0
 prometheus-fastapi-instrumentator>=7.0.0
 fpdf2>=2.7.0
 Pillow>=10.0.0
+openpyxl>=3.1

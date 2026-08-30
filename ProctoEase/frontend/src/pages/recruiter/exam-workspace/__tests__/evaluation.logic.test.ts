@@ -43,6 +43,7 @@ function makeCandidate(overrides: Partial<CandidateEvaluation> = {}): CandidateE
     recruiter_notes: null,
     reviewed_by: null,
     reviewed_at: null,
+    reviewed_by_email: null,
     ...overrides,
   }
 }

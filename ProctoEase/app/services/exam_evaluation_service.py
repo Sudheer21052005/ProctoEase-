@@ -281,9 +281,13 @@ async def get_exam_evaluation(
     candidate_ids = [a.candidate_id for a in attempts]
 
     # 4. Candidate identities in one query. ── query 4
+    # Phase E: the SAME single batched lookup also covers reviewer users
+    # (attempt.reviewed_by), so the Excel export's "Reviewed By" email needs
+    # no additional query — candidates ∪ reviewers stays one round trip.
+    reviewer_ids = {a.reviewed_by for a in attempts if a.reviewed_by is not None}
     users_result = await db.execute(
         select(User.id, User.full_name, User.email).where(
-            User.id.in_(candidate_ids),
+            User.id.in_(set(candidate_ids) | reviewer_ids),
             User.tenant_id == tenant_id,
         )
     )
@@ -432,6 +436,14 @@ async def get_exam_evaluation(
                 "recruiter_notes": att.recruiter_notes,
                 "reviewed_by": att.reviewed_by,
                 "reviewed_at": att.reviewed_at,
+                # Phase E: reviewer email from the same batched user lookup
+                # (values are (full_name, email); None when never reviewed or
+                # when the reviewer's user row is missing).
+                "reviewed_by_email": (
+                    users_by_id.get(att.reviewed_by, (None, None))[1]
+                    if att.reviewed_by is not None
+                    else None
+                ),
             }
         )
 

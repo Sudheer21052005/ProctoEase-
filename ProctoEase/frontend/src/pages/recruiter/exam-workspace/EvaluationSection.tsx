@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react"
 import { useNavigate, useParams } from "react-router-dom"
-import { Loader2, Download, ExternalLink, Search, ShieldQuestion, Gavel } from "lucide-react"
+import { Loader2, Download, ExternalLink, Search, ShieldQuestion, Gavel, FileSpreadsheet } from "lucide-react"
 import { toast } from "sonner"
 import { useExamEvaluation, useSetRecruiterDecision } from "@/hooks/useReporting"
 import { reportingApi } from "@/api/reporting.api"
@@ -77,6 +77,45 @@ function Pill({
 
 const STATIC_TH =
   "px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500"
+
+/** Phase E: exports the COMPLETE exam dataset via the canonical backend
+ *  evaluation — independent of any active on-screen filters. */
+function ExportExcelButton({ examId }: { examId: string }) {
+  const [isExporting, setIsExporting] = useState(false)
+
+  const handleExport = async () => {
+    if (!examId || isExporting) return
+    setIsExporting(true)
+    try {
+      await reportingApi.exportCandidateEvaluationsExcel(examId)
+      toast.success("Candidate evaluations exported.")
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Unable to export the candidate evaluations."
+      toast.error(message)
+    } finally {
+      setIsExporting(false)
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      id="btn-export-evaluations-excel"
+      disabled={!examId || isExporting}
+      onClick={handleExport}
+      aria-label="Export candidate evaluations Excel"
+      className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-white/[0.08] bg-[#1e2638] text-xs font-medium text-slate-200 hover:border-[#6366f1]/50 hover:text-white hover:bg-[#252f44] transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[#1e2638] shrink-0"
+    >
+      {isExporting ? (
+        <Loader2 className="h-4 w-4 animate-spin" />
+      ) : (
+        <FileSpreadsheet className="h-4 w-4" strokeWidth={1.75} />
+      )}
+      {isExporting ? "Exporting…" : "Export Excel"}
+    </button>
+  )
+}
 
 /** One table row. Holds its OWN download/edit state so one action never blocks the table. */
 function EvaluationRow({
@@ -422,13 +461,16 @@ export default function EvaluationSection() {
                 {isFetching ? " · refreshing…" : ""}
               </p>
             </div>
-            <p className="text-xs text-slate-500 max-w-sm text-right">
-              System recommendations are automated decision support, not a final
-              hiring decision. The{" "}
-              <span className="text-slate-300 font-medium">Recruiter Decision</span>{" "}
-              is the final human judgment — it never alters the System
-              Recommendation.
-            </p>
+            <div className="flex flex-col items-end gap-3">
+              <p className="text-xs text-slate-500 max-w-sm text-right">
+                System recommendations are automated decision support, not a final
+                hiring decision. The{" "}
+                <span className="text-slate-300 font-medium">Recruiter Decision</span>{" "}
+                is the final human judgment — it never alters the System
+                Recommendation.
+              </p>
+              <ExportExcelButton examId={examId || ""} />
+            </div>
           </div>
 
           <div className="flex flex-wrap gap-2 mt-4 pt-4 border-t border-white/[0.06]">

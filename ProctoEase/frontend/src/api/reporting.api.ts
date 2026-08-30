@@ -116,6 +116,8 @@ export interface CandidateEvaluation {
   recruiter_notes: string | null
   reviewed_by: string | null
   reviewed_at: string | null
+  // Phase E: reviewer email (same batched lookup; null when never reviewed).
+  reviewed_by_email: string | null
 }
 
 /* ── Phase D: recruiter decision ──
@@ -175,8 +177,28 @@ export const reportingApi = {
       })
       .then((r) => r.data),
 
-  exportExamCsv: async (examId: string) => {
-    const response = await api.get(`/exams/${examId}/export/csv`, {
+  // Phase E: always exports the COMPLETE exam dataset (server-side canonical
+  // evaluation) — independent of any client-side table filters.
+  exportCandidateEvaluationsExcel: async (examId: string) => {
+    const response = await api.get(
+      `/exams/${examId}/candidate-evaluations/excel`,
+      { responseType: "blob" }
+    )
+    const url = window.URL.createObjectURL(
+      new Blob([response.data], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      })
+    )
+    const link = document.createElement("a")
+    link.href = url
+    link.setAttribute("download", `candidate_evaluations_${examId}.xlsx`)
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.URL.revokeObjectURL(url)
+  },
+
+  exportExamCsv: async (examId: string) => {    const response = await api.get(`/exams/${examId}/export/csv`, {
       responseType: "blob",
     })
     const url = window.URL.createObjectURL(

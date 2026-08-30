@@ -84,6 +84,8 @@ class CandidateEvaluation(BaseModel):
     recruiter_notes: str | None = None
     reviewed_by: uuid.UUID | None = None
     reviewed_at: datetime | None = None
+    # Phase E: reviewer email (same batched lookup; None when never reviewed).
+    reviewed_by_email: str | None = None
 
 
 class ExamEvaluationResponse(BaseModel):

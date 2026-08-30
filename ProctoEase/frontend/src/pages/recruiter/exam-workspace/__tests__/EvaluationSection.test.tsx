@@ -33,6 +33,7 @@ vi.mock("@/api/reporting.api", () => ({
   RECRUITER_DECISIONS: ["PENDING", "SHORTLISTED", "REVIEW", "REJECTED"],
   reportingApi: {
     downloadIntegrityReportPdf: vi.fn(),
+    exportCandidateEvaluationsExcel: vi.fn(),
   },
 }))
 
@@ -94,6 +95,7 @@ function makeCandidate(overrides: Partial<CandidateEvaluation> = {}): CandidateE
     recruiter_notes: null,
     reviewed_by: null,
     reviewed_at: null,
+    reviewed_by_email: null,
     ...overrides,
   }
 }
@@ -260,6 +262,77 @@ describe("EvaluationSection", () => {
     expect(reasonEl).toBeInTheDocument()
     // Also exposed as the pill's tooltip.
     expect(screen.getByTitle(reason)).toBeInTheDocument()
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase E — Excel export
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("EvaluationSection — Export Excel (Phase E)", () => {
+  it("E1. renders the export button and calls the export API with the exam id, toasting success", async () => {
+    const exportMock = vi.mocked(reportingApi.exportCandidateEvaluationsExcel)
+    exportMock.mockResolvedValueOnce(undefined)
+    mockHookReturn.data = makeResponse([makeCandidate()])
+    renderSection()
+
+    const btn = screen.getByRole("button", { name: "Export candidate evaluations Excel" })
+    fireEvent.click(btn)
+
+    await vi.waitFor(() => expect(exportMock).toHaveBeenCalledExactlyOnceWith("exam-1"))
+    await vi.waitFor(() => expect(toastSuccess).toHaveBeenCalledWith("Candidate evaluations exported."))
+    expect(toastError).not.toHaveBeenCalled()
+  })
+
+  it("E2. shows the exporting spinner while the request is in flight", async () => {
+    let resolveExport: () => void
+    const exportMock = vi.mocked(reportingApi.exportCandidateEvaluationsExcel)
+    exportMock.mockImplementationOnce(
+      () => new Promise<void>((resolve) => { resolveExport = resolve })
+    )
+    mockHookReturn.data = makeResponse([makeCandidate()])
+    renderSection()
+
+    fireEvent.click(screen.getByRole("button", { name: "Export candidate evaluations Excel" }))
+    expect(await screen.findByText("Exporting…")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Export candidate evaluations Excel" })).toBeDisabled()
+
+    resolveExport!()
+    await vi.waitFor(() =>
+      expect(screen.getByRole("button", { name: "Export candidate evaluations Excel" })).toBeEnabled()
+    )
+  })
+
+  it("E3. export failure surfaces an error toast", async () => {
+    const exportMock = vi.mocked(reportingApi.exportCandidateEvaluationsExcel)
+    exportMock.mockRejectedValueOnce(new Error("Unable to export the candidate evaluations."))
+    mockHookReturn.data = makeResponse([makeCandidate()])
+    renderSection()
+
+    fireEvent.click(screen.getByRole("button", { name: "Export candidate evaluations Excel" }))
+    await vi.waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith("Unable to export the candidate evaluations.")
+    )
+    expect(toastSuccess).not.toHaveBeenCalled()
+  })
+
+  it("E4. export always uses the exam id — unaffected by active table filters", async () => {
+    const exportMock = vi.mocked(reportingApi.exportCandidateEvaluationsExcel)
+    exportMock.mockResolvedValueOnce(undefined)
+    mockHookReturn.data = makeResponse([
+      makeCandidate(),
+      makeCandidate({ attempt_id: "attempt-BBB", candidate_name: "Grace Hopper", candidate_email: "grace@navy.mil" }),
+    ])
+    renderSection()
+
+    // Narrow the table to one candidate first...
+    fireEvent.change(screen.getByLabelText("Search candidates"), { target: { value: "Grace" } })
+    expect(screen.getByText("Grace Hopper")).toBeInTheDocument()
+    expect(screen.queryByText("Ada Lovelace")).not.toBeInTheDocument()
+
+    // ...then export: still the full exam id, never the filtered subset.
+    fireEvent.click(screen.getByRole("button", { name: "Export candidate evaluations Excel" }))
+    await vi.waitFor(() => expect(exportMock).toHaveBeenCalledExactlyOnceWith("exam-1"))
   })
 })
 
