@@ -173,6 +173,7 @@ class IntegrityReportPDF(FPDF):
         rows: list[list[str]],
         col_ratios: list[float] | None = None,
         aligns: list[str] | None = None,
+        cell_style: Any | None = None,
     ):
         """Wrapping table: widths derived from epw, row heights measured,
         page breaks between rows (never inside one), header repeated."""
@@ -215,6 +216,11 @@ class IntegrityReportPDF(FPDF):
             x0, y0 = self.get_x(), self.get_y()
             for i, cell in enumerate(row):
                 self.multi_cell(widths[i], LINE_H, self.clean_text(str(cell)), border=1, fill=fill, align=aligns[i], new_x="RIGHT", new_y="TOP")
+            # Optional per-cell styling hook (e.g. semantic fills in the
+            # exam-wide summary roster). Default None: behaviour unchanged.
+            if cell_style is not None:
+                for i in range(len(row)):
+                    cell_style(i, x0 + sum(widths[:i]), y0, widths[i], row_h, row)
             self.set_xy(x0, y0 + row_h)
 
         render_header_row()

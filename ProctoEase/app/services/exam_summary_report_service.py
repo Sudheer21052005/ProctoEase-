@@ -1,5 +1,5 @@
 """
-Exam-wide Summary Report PDF service (Phase F).
+Exam-wide Summary Report PDF service (Phase F, polished presentation).
 
 A recruiter-facing, exam-level summary PDF — distinct from the individual
 Candidate Integrity Report. It is a pure RENDERER over the canonical
@@ -9,13 +9,15 @@ payload. Risk is never recomputed; the Phase B recommendation engine is never
 re-derived; the Phase D recruiter decision is reported separately from the
 system recommendation (and never changes it).
 
-PDF presentation:
- - Portrait A4 via the hardened ``IntegrityReportPDF`` infrastructure
-   (DejaVu Unicode fonts, wrapping tables, orphan-safe sections).
- - Score/risk/recommendation/decision distributions as horizontal bar rows
-   drawn with plain fpdf2 rectangles (no new dependencies).
- - System Recommendation stays visually neutral (plain table); Recruiter
-   Decision is reported in its own section with the authoritative disclaimer.
+Presentation system (restrained, professional):
+ - NAVY primary for headings, rules and score-distribution bars.
+ - Semantic colors ONLY where they carry meaning: green = LOW / SHORTLISTED,
+   amber = MEDIUM / HIGH / REVIEW, red = CRITICAL / REJECTED, gray =
+   PENDING / neutral.
+ - System Recommendation stays visually NEUTRAL (plain table, no fills) — it
+   is automated decision support, never a human decision.
+ - Recruiter Decision carries the semantic colors — it is the final human
+   judgment.
 """
 
 from __future__ import annotations
@@ -27,7 +29,7 @@ from statistics import median
 from typing import Any, Mapping
 
 from app.services.exam_evaluation_service import get_exam_evaluation
-from app.services.integrity_report_service import IntegrityReportPDF
+from app.services.integrity_report_service import SECTION_MIN_SPACE, IntegrityReportPDF
 
 # ── Authoritative presentation constants ─────────────────────────────────────
 SCORE_BANDS = [
@@ -51,7 +53,37 @@ DISCLAIMER = (
     "decisions are the final human judgment."
 )
 TOP_VIOLATION_TYPES = 10
-BAR_MAX_WIDTH = 60.0  # mm of bar per full count
+BAR_MAX_WIDTH = 70.0   # mm of bar at the peak count
+BAR_H = 5.0            # thicker, per the polish pass
+LABEL_W = 52.0
+COUNT_W = 16.0
+
+# Restrained palette (RGB 0–255)
+NAVY = (30, 58, 138)
+NAVY_FILL = (219, 228, 246)
+INK = (31, 41, 55)
+MUTED = (107, 114, 128)
+GREEN = (21, 128, 61)
+GREEN_FILL = (209, 250, 229)
+AMBER = (180, 83, 9)
+AMBER_FILL = (254, 243, 199)
+RED = (185, 28, 28)
+RED_FILL = (254, 202, 202)
+GRAY_FILL = (243, 244, 246)
+
+RISK_FILLS = {"low": GREEN_FILL, "medium": AMBER_FILL, "high": AMBER_FILL, "critical": RED_FILL}
+RISK_BAR_COLORS = {
+    "low": GREEN,
+    "medium": AMBER,
+    "high": (234, 88, 12),
+    "critical": RED,
+}
+DECISION_FILLS = {
+    "PENDING": GRAY_FILL,
+    "SHORTLISTED": GREEN_FILL,
+    "REVIEW": AMBER_FILL,
+    "REJECTED": RED_FILL,
+}
 
 
 # ── Pure aggregation helpers (unit-testable, no I/O) ─────────────────────────
@@ -151,22 +183,93 @@ def recruiter_decision_distribution(candidates: list[dict]) -> list[tuple[str, i
 
 
 class _SummaryReportPDF(IntegrityReportPDF):
-    """IntegrityReportPDF + horizontal distribution bar rows."""
+    """IntegrityReportPDF with the exam-wide summary's own header, footer,
+    stat blocks and colored distribution primitives."""
 
-    def distribution_bars(self, rows: list[tuple[str, int]], max_count: int | None = None):
-        """Label | bar | count. Pure fpdf2 rects; wraps to a new page safely."""
-        peak = max_count if max_count is not None else max((n for _, n in rows), default=0)
-        bar_max = BAR_MAX_WIDTH if peak > 0 else 0.001
-        for label, count in rows:
-            self.ensure_space(8)
+    def __init__(self):
+        super().__init__()
+        self.generated_at_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+    # Exam-wide document title (overrides the inherited integrity-report header).
+    def header(self):
+        self.set_font(self.default_font, "B", 15)
+        self.set_text_color(*NAVY)
+        self.cell(0, 10, self.clean_text("Exam-Wide Evaluation Summary"), align="C", new_x="LMARGIN", new_y="NEXT")
+        self.set_text_color(*INK)
+        self.set_draw_color(*NAVY)
+        self.set_line_width(0.5)
+        self.line(self.l_margin, self.get_y(), self.l_margin + self.epw, self.get_y())
+        self.set_line_width(0.2)
+        self.ln(5)
+
+    def footer(self):
+        self.set_y(-18)
+        self.set_font(self.default_font, "", 7.5)
+        self.set_text_color(*MUTED)
+        self.cell(0, 4, self.clean_text("ProctoEase — Exam-Wide Evaluation Summary"), align="L", new_x="LMARGIN", new_y="NEXT")
+        self.cell(95, 4, self.clean_text(f"Generated {self.generated_at_utc} UTC"), align="L")
+        self.set_font(self.default_font, "B", 7.5)
+        self.cell(0, 4, self.clean_text("CONFIDENTIAL — Recruiter Use Only"), align="R", new_x="LMARGIN", new_y="NEXT")
+        self.set_font(self.default_font, "", 7.5)
+        self.cell(0, 4, f"Page {self.page_no()}/{{nb}}", align="C")
+        self.set_text_color(*INK)
+
+    def section_title(self, title: str):
+        self.ensure_space(SECTION_MIN_SPACE)
+        self.set_font(self.default_font, "B", 11.5)
+        self.set_text_color(*NAVY)
+        self.set_fill_color(*NAVY_FILL)
+        self.cell(0, 7.5, self.clean_text(title), fill=True, new_x="LMARGIN", new_y="NEXT")
+        self.set_text_color(*INK)
+        self.ln(2)
+
+    def stat_block(self, pairs: list[tuple[str, str]]):
+        """Compact 3-per-row stat boxes: small-caps label over a bold value."""
+        gap = 4.0
+        box_w = (self.epw - 2 * gap) / 3
+        box_h = 14.0
+        for start in range(0, len(pairs), 3):
+            row = pairs[start:start + 3]
+            self.ensure_space(box_h + 3)
+            x0 = self.l_margin
+            for label, value in row:
+                self.set_fill_color(*NAVY_FILL)
+                self.set_draw_color(148, 163, 205)
+                self.rect(x0, self.get_y(), box_w, box_h, style="FD")
+                self.set_xy(x0 + 2.5, self.get_y() + 2)
+                self.set_font(self.default_font, "", 6.5)
+                self.set_text_color(*MUTED)
+                self.cell(box_w - 5, 3, self.clean_text(label.upper()), align="L", new_x="LMARGIN", new_y="NEXT")
+                self.set_x(x0 + 2.5)
+                self.set_font(self.default_font, "B", 11)
+                self.set_text_color(*INK)
+                self.cell(box_w - 5, 6, self.clean_text(value), align="L")
+                x0 += box_w + gap
+            self.set_y(self.get_y() + box_h + 3)
+        self.set_text_color(*INK)
+
+    def distribution_bars(
+        self,
+        rows: list[tuple[str, int]],
+        colors: list[Any] | None = None,
+    ):
+        """Label | bar | right-aligned count. Pure fpdf2 rects; page-safe."""
+        peak = max((n for _, n in rows), default=0)
+        scale = (BAR_MAX_WIDTH / peak) if peak > 0 else 0.0
+        for idx, (label, count) in enumerate(rows):
+            self.ensure_space(BAR_H + 3)
             self.set_font(self.default_font, "", 9)
-            self.cell(52, 6, self.clean_text(label), align="L")
-            x_after_label = self.get_x()
-            bar_w = (count / peak) * bar_max if (peak and count) else 0.0
-            self.set_fill_color(99, 102, 241)
-            self.rect(x_after_label, self.get_y() + 1, bar_w, 4, style="F")
-            self.set_x(self.l_margin + 52 + BAR_MAX_WIDTH + 4)
-            self.cell(0, 6, self.clean_text(str(count)), align="L", new_x="LMARGIN", new_y="NEXT")
+            self.set_text_color(*INK)
+            self.cell(LABEL_W, BAR_H + 1, self.clean_text(label), align="L")
+            bar_color = colors[idx] if colors and colors[idx] is not None else NAVY
+            self.set_fill_color(*bar_color)
+            bar_w = count * scale
+            if bar_w > 0:
+                self.rect(self.l_margin + LABEL_W, self.get_y() + 0.5, bar_w, BAR_H, style="F")
+            self.set_x(self.l_margin + LABEL_W + BAR_MAX_WIDTH + 4)
+            self.set_font(self.default_font, "B", 9)
+            self.cell(COUNT_W, BAR_H + 1, self.clean_text(str(count)), align="R", new_x="LMARGIN", new_y="NEXT")
+        self.set_text_color(*INK)
 
 
 async def generate_exam_summary_report_pdf(
@@ -200,22 +303,32 @@ def _render(evaluation: Mapping[str, Any]) -> bytes:
 
     pdf = _SummaryReportPDF()
     pdf.alias_nb_pages()
-    pdf.set_auto_page_break(auto=True, margin=20)
+    pdf.set_auto_page_break(auto=True, margin=24)
     pdf.add_page()
 
     # ── 1. Exam Overview ─────────────────────────────────────────────────
     pdf.section_title("Exam Overview")
     pdf.key_value("Exam Title:", str(evaluation.get("exam_title") or "Unknown"))
     pdf.key_value("Exam ID:", str(evaluation.get("exam_id") or ""))
-    pdf.key_value(
-        "Generated At:",
-        datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+    pdf.ln(1)
+    pdf.stat_block(
+        [
+            ("Total Attempts", str(completion["total"])),
+            ("Completion Rate", f"{completion['completion_rate_pct']}%"),
+            (
+                "Average Duration (start → submit)",
+                (
+                    f"{completion['avg_duration_minutes']} min"
+                    if completion["avg_duration_minutes"] is not None
+                    else "N/A"
+                ),
+            ),
+            ("Passing Score", f"{evaluation.get('passing_score_pct')}%"),
+            ("Borderline Maximum", f"{evaluation.get('borderline_max_pct')}%"),
+            ("Excellence Score", f"{evaluation.get('excellence_score_pct')}%"),
+        ]
     )
-    pdf.key_value("Total Attempts:", str(completion["total"]))
-    pdf.key_value("Passing Score:", f"{evaluation.get('passing_score_pct')}%")
-    pdf.key_value("Borderline Maximum:", f"{evaluation.get('borderline_max_pct')}%")
-    pdf.key_value("Excellence Score:", f"{evaluation.get('excellence_score_pct')}%")
-    pdf.ln(3)
+    pdf.ln(1)
 
     # ── 2. Candidate & Completion Statistics ─────────────────────────────
     pdf.section_title("Candidate & Completion Statistics")
@@ -225,7 +338,7 @@ def _render(evaluation: Mapping[str, Any]) -> bytes:
     pdf.key_value("Evaluated:", str(completion["evaluated"]))
     pdf.key_value("Completion Rate:", f"{completion['completion_rate_pct']}%")
     pdf.key_value(
-        "Average Duration:",
+        "Average Duration (start → submit):",
         (
             f"{completion['avg_duration_minutes']} minutes"
             if completion["avg_duration_minutes"] is not None
@@ -265,9 +378,15 @@ def _render(evaluation: Mapping[str, Any]) -> bytes:
     pdf.section_title("Proctoring / Risk Summary")
     pdf.distribution_bars(
         [(level.upper(), risk[level]) for level in RISK_LEVELS]
-        + [("RISK UNAVAILABLE", risk["unavailable"])]
+        + [("RISK UNAVAILABLE", risk["unavailable"])],
+        colors=[RISK_BAR_COLORS[level] for level in RISK_LEVELS] + [None],
     )
-    pdf.key_value("Severe Integrity Flags:", str(severe))
+    # Emphasised severe-integrity total (exact value preserved).
+    pdf.ensure_space(8)
+    pdf.set_font(pdf.default_font, "B", 10)
+    pdf.set_text_color(*(RED if severe > 0 else INK))
+    pdf.cell(0, 7, pdf.clean_text(f"Severe Integrity Flags: {severe}"), new_x="LMARGIN", new_y="NEXT")
+    pdf.set_text_color(*INK)
     pdf.ln(3)
 
     # ── 6. Top Violation Types ───────────────────────────────────────────
@@ -285,6 +404,8 @@ def _render(evaluation: Mapping[str, Any]) -> bytes:
         pdf.ln(3)
 
     # ── 7. System Recommendation Distribution ────────────────────────────
+    # Deliberately NEUTRAL: plain table, no semantic colors — these are
+    # automated engine outputs, not human decisions.
     pdf.section_title("System Recommendation Distribution")
     pdf.add_table(
         ["System Recommendation (automated)", "Count"],
@@ -294,12 +415,18 @@ def _render(evaluation: Mapping[str, Any]) -> bytes:
     )
 
     # ── 8. Recruiter Decision Distribution ───────────────────────────────
+    # Semantic colors: the final HUMAN judgment.
     pdf.section_title("Recruiter Decision Distribution")
     pdf.add_table(
         ["Recruiter Decision (final human judgment)", "Count"],
         [[decision, str(count)] for decision, count in decisions],
         col_ratios=[70, 30],
         aligns=["L", "C"],
+        cell_style=lambda i, x, y, w, h, row: (
+            _fill_cell(pdf, x, y, w, h, DECISION_FILLS.get(row[0], GRAY_FILL))
+            if i == 0
+            else None
+        ),
     )
     pdf.set_font(pdf.default_font, "I", 9)
     pdf.multi_cell(pdf.epw, 5, pdf.clean_text(DISCLAIMER), new_x="LMARGIN", new_y="NEXT")
@@ -313,17 +440,31 @@ def _render(evaluation: Mapping[str, Any]) -> bytes:
                 c.get("candidate_name") or "—",
                 c.get("candidate_email") or "—",
                 f"{c['percentage']}%" if c.get("percentage") is not None else "Not graded",
-                (c.get("risk_level") or "N/A") if c.get("risk_available") else "N/A",
+                (c.get("risk_level") or "—") if c.get("risk_available") else "N/A",
                 c.get("recommendation", {}).get("code", ""),
                 c.get("recruiter_decision") or "PENDING",
             ]
             for c in candidates
         ]
+
+        def roster_cell_style(i, x, y, w, h, row):
+            if i == 3:  # Risk
+                fill = RISK_FILLS.get(row[3].lower())
+            elif i == 5:  # Recruiter Decision
+                fill = DECISION_FILLS.get(row[5], GRAY_FILL)
+            else:
+                return
+            if fill:
+                _fill_cell(pdf, x, y, w, h, fill)
+
+        # Email column widened vs the first pass to reduce wrapping; the
+        # hardened add_table still wraps/paginates/repeats headers.
         pdf.add_table(
             ["Candidate Name", "Email", "Score %", "Risk", "System Recommendation", "Recruiter Decision"],
             roster_rows,
-            col_ratios=[25, 35, 15, 15, 45, 20],
+            col_ratios=[20, 40, 12, 12, 45, 22],
             aligns=["L", "L", "C", "C", "L", "C"],
+            cell_style=roster_cell_style,
         )
     else:
         pdf.set_font(pdf.default_font, "I", 10)
@@ -331,3 +472,12 @@ def _render(evaluation: Mapping[str, Any]) -> bytes:
 
     pdf_bytes = pdf.output()
     return bytes(pdf_bytes) if isinstance(pdf_bytes, bytearray) else pdf_bytes
+
+
+def _fill_cell(pdf: _SummaryReportPDF, x: float, y: float, w: float, h: float, fill: tuple[int, int, int]):
+    """Paint a translucent tint over an already-drawn table cell. Cells are
+    rendered (text included) before the hook fires, so the tint MUST be
+    semi-transparent — the cell text remains readable through it."""
+    with pdf.local_context(fill_opacity=0.45):
+        pdf.set_fill_color(*fill)
+        pdf.rect(x, y, w, h, style="F")

@@ -195,11 +195,18 @@ class TestSummaryPdfContent:
 
     def test_overview_benchmarks_and_title_present(self):
         text = _flatten(_extract(self._pdf(make_evaluation())))
+        # Polished header/footer (Phase F polish)
+        assert "Exam-WideEvaluationSummary" in text
+        assert "CONFIDENTIAL—RecruiterUseOnly" in text
+        assert "ProctoEase—Exam-WideEvaluationSummary" in text
+        assert "Page1/2" in text or "Page2/2" in text or "Page1/1" in text
         assert "Algorithms&CloudInfrastructureBenchmark(Test3)" in text
-        assert "PassingScore:50.0%" in text
-        assert "BorderlineMaximum:60.0%" in text
-        assert "ExcellenceScore:75.0%" in text
-        assert "TotalAttempts:1" in text
+        # Stat-block labels (uppercased) with their bold values
+        assert "PASSINGSCORE" in text and "50.0%" in text
+        assert "BORDERLINEMAXIMUM" in text and "60.0%" in text
+        assert "EXCELLENCE SCORE".replace(" ", "") in text and "75.0%" in text
+        assert "TOTALATTEMPTS" in text
+        assert "COMPLETIONRATE" in text
 
     def test_score_stats_rendered(self):
         evaluation = make_evaluation(
@@ -275,8 +282,8 @@ class TestSummaryPdfContent:
         evaluation["violation_type_histogram"] = {}
         data = self._pdf(evaluation)
         text = _flatten(_extract(data))
-        assert "TotalAttempts:0" in text
-        assert "CompletionRate:0.0%" in text
+        assert "TOTALATTEMPTS" in text and "COMPLETIONRATE" in text
+        assert "0.0%" in text  # completion rate zero, never fabricated
         assert "Noattemptsrecordedforthisexam." in text
         assert "Noviolationsrecordedforthisexam." in text
         # N/A statistics, never fabricated numbers
@@ -305,6 +312,20 @@ class TestSummaryPdfContent:
         full = _flatten(_extract(data))
         for i in (0, 29, 59):
             assert f"Candidate{i:02d}" in full  # zero loss across pages
+
+    def test_decision_and_roster_semantic_distinction_preserved(self):
+        """Polish regression: recommendation codes render neutrally while the
+        human decision column carries the semantic value — both still exact."""
+        evaluation = make_evaluation(
+            candidates=[
+                make_candidate(recruiter_decision="REJECTED", recruiter_notes="Declined."),
+            ]
+        )
+        text = _flatten(_extract(self._pdf(evaluation)))
+        assert "NOT_RECOMMENDED_BOTH" in text  # engine output, verbatim
+        assert "REJECTED" in text             # human decision, verbatim
+        assert "RecruiterDecision(finalhumanjudgment)" in text
+        assert "SystemRecommendation(automated)" in text
 
     def test_null_optional_values_do_not_crash(self):
         evaluation = make_evaluation(
