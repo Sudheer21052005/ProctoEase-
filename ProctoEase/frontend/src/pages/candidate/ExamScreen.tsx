@@ -305,7 +305,7 @@ export default function ExamScreen() {
 
   return (
     <div
-      className="min-h-[100dvh] flex flex-col bg-[#0f1117]"
+      className="min-h-screen bg-[#0d1117] text-white flex flex-col select-none"
       onContextMenu={(e) => e.preventDefault()}
     >
       {/* Fullscreen blocking overlay */}
@@ -423,14 +423,31 @@ export default function ExamScreen() {
                         {currentIndex + 1} / {questions.length}
                       </span>
                       <button
-                        onClick={() =>
-                          setCurrentIndex(Math.min(questions.length - 1, currentIndex + 1))
-                        }
-                        disabled={currentIndex >= questions.length - 1}
-                        className="inline-flex items-center gap-2 px-4 py-2 bg-[#6366f1] hover:bg-[#4f46e5] text-white text-sm font-semibold rounded-xl transition-all hover:-translate-y-[1px] disabled:opacity-30 disabled:hover:translate-y-0"
+                        onClick={async () => {
+                          if (attemptId) {
+                            try {
+                              const payload = buildAnswerPayload()
+                              await saveAnswers.mutateAsync({ attemptId, answers: payload })
+                            } catch (err) {
+                              console.error("Auto-save failed on continue:", err)
+                            }
+                          }
+                          if (currentIndex < questions.length - 1) {
+                            setCurrentIndex(currentIndex + 1)
+                          } else {
+                            setShowSubmitDialog(true)
+                          }
+                        }}
+                        className="inline-flex items-center gap-2 px-5 py-2 bg-[#6366f1] hover:bg-[#4f46e5] text-white text-sm font-semibold rounded-xl transition-all hover:-translate-y-[1px] shadow-sm"
                       >
-                        Next
-                        <ArrowRight className="h-4 w-4" />
+                        {currentIndex < questions.length - 1 ? (
+                          <>
+                            Submit &amp; Continue
+                            <ArrowRight className="h-4 w-4" />
+                          </>
+                        ) : (
+                          <>Submit Exam</>
+                        )}
                       </button>
                     </div>
                   </div>

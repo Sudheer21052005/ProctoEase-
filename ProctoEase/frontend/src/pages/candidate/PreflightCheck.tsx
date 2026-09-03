@@ -11,10 +11,10 @@ import {
   Monitor,
   Camera,
   Mic,
-  Maximize,
   FileText,
   Loader2,
   ArrowRight,
+  RefreshCw,
 } from "lucide-react"
 import type { AxiosError } from "axios"
 import { formatDate } from "@/lib/utils"
@@ -36,16 +36,21 @@ export default function PreflightCheck() {
   } = useMyAttempts()
   const setActiveAttempt = useActiveAttemptStore((s) => s.setActiveAttempt)
 
+  // Two-page flow: 0 = Exam Readiness, 1 = Rules & Terms.
   const [step, setStep] = useState(0)
   const [checks, setChecks] = useState<CheckResult[]>([])
+  const [checking, setChecking] = useState(false)
   const [agreed, setAgreed] = useState(false)
   const [verificationImage, setVerificationImage] = useState<string>("")
   const [capturing, setCapturing] = useState(false)
-  const verificationVideoRef = useRef<HTMLVideoElement>(null)
+  const verificationVideoRef = useRef<HTMLVideoElement | null>(null)
   const verificationCanvasRef = useRef<HTMLCanvasElement>(null)
   const verificationStreamRef = useRef<MediaStream | null>(null)
 
-  // Step 0: Browser compatibility
+  // Browser / media capability probe — synchronous, no permission prompt.
+  // NOTE: this only detects that the Fullscreen API EXISTS; it does not enter
+  // fullscreen. Fullscreen ENTRY happens on the final Start Exam click, and
+  // fullscreen enforcement remains in the exam's background proctoring.
   const checkBrowser = useCallback(() => {
     const hasMedia = !!navigator.mediaDevices?.getUserMedia
     const hasFullscreen = !!document.documentElement.requestFullscreen
@@ -59,7 +64,9 @@ export default function PreflightCheck() {
     return allPass
   }, [])
 
-  // Step 1: Webcam
+  // Camera — requests a REAL stream (genuine permission prompt). The stream is
+  // retained for the mandatory identity photo and released on unmount. The
+  // stream-reuse guard prevents re-prompting when the check is re-run.
   const [webcamOk, setWebcamOk] = useState<boolean | null>(null)
   const checkWebcam = useCallback(async () => {
     try {
@@ -73,6 +80,16 @@ export default function PreflightCheck() {
       setWebcamOk(true)
     } catch {
       setWebcamOk(false)
+    }
+  }, [])
+
+  // Reattach the retained camera stream whenever the <video> mounts (e.g. after
+  // navigating back to the Readiness page). Reuses the single existing stream —
+  // no duplicate getUserMedia.
+  const setVideoNode = useCallback((node: HTMLVideoElement | null) => {
+    verificationVideoRef.current = node
+    if (node && verificationStreamRef.current) {
+      node.srcObject = verificationStreamRef.current
     }
   }, [])
 
@@ -102,7 +119,8 @@ export default function PreflightCheck() {
     toast.success("Verification photo captured")
   }, [])
 
-  // Step 2: Microphone
+  // Microphone — requests a REAL stream, then releases it immediately (we only
+  // need to confirm the permission/device works).
   const [micOk, setMicOk] = useState<boolean | null>(null)
   const checkMic = useCallback(async () => {
     try {
@@ -114,20 +132,23 @@ export default function PreflightCheck() {
     }
   }, [])
 
-  // Step 3: Fullscreen
-  const [fsOk, setFsOk] = useState<boolean | null>(null)
-  const checkFullscreen = useCallback(async () => {
+  // Single "Check All" action — verifies browser/media support, camera and
+  // microphone in one click. Checks that already passed are not re-requested,
+  // so permissions are never asked for repeatedly.
+  const runAllChecks = useCallback(async () => {
+    setChecking(true)
     try {
-      await document.documentElement.requestFullscreen()
-      setFsOk(true)
-      // Exit fullscreen for now; exam screen will re-enter
-      if (document.fullscreenElement) await document.exitFullscreen()
-    } catch {
-      setFsOk(false)
+      checkBrowser()
+      await Promise.all([
+        webcamOk === true ? Promise.resolve() : checkWebcam(),
+        micOk === true ? Promise.resolve() : checkMic(),
+      ])
+    } finally {
+      setChecking(false)
     }
-  }, [])
+  }, [checkBrowser, checkWebcam, checkMic, webcamOk, micOk])
 
-  // Run browser check on mount
+  // Probe browser support on mount (no permission prompt).
   useEffect(() => {
     checkBrowser()
   }, [checkBrowser])
@@ -139,13 +160,30 @@ export default function PreflightCheck() {
     }
   }, [])
 
-  const allChecksPassed =
-    checks.every((c) => c.passed) &&
+  const browserReady = checks.length === 0 ? null : checks.every((c) => c.passed)
+
+  const readinessItems: {
+    key: string
+    label: string
+    icon: typeof Monitor
+    ready: boolean | null
+    retry: () => unknown
+  }[] = [
+    { key: "browser", label: "Browser & media support", icon: Monitor, ready: browserReady, retry: checkBrowser },
+    { key: "camera", label: "Camera access", icon: Camera, ready: webcamOk, retry: checkWebcam },
+    { key: "microphone", label: "Microphone access", icon: Mic, ready: micOk, retry: checkMic },
+  ]
+
+  // Readiness is complete when support + camera + microphone pass AND the
+  // mandatory identity photo has been captured. Fullscreen is NOT gated here —
+  // it is requested on the Start Exam click and enforced during the exam.
+  const readinessComplete =
+    browserReady === true &&
     webcamOk === true &&
     micOk === true &&
-    fsOk === true &&
-    !!verificationImage &&
-    agreed
+    !!verificationImage
+
+  const canStart = readinessComplete && agreed
 
   const nowMs = Date.now()
   const startMs = exam?.start_time ? new Date(exam.start_time).getTime() : null
@@ -245,53 +283,73 @@ export default function PreflightCheck() {
   const steps = [
     {
       icon: Monitor,
-      title: "Browser Compatibility",
-      content: (
-        <div className="space-y-3">
-          {checks.map((c) => (
-            <div key={c.label} className="flex items-center gap-3">
-              {c.passed ? (
-                <CheckCircle className="h-5 w-5 text-success" />
-              ) : (
-                <XCircle className="h-5 w-5 text-danger" />
-              )}
-              <span className="text-sm">{c.label}</span>
-            </div>
-          ))}
-        </div>
-      ),
-    },
-    {
-      icon: Camera,
-      title: "Webcam Permission",
+      title: "Exam Readiness",
       content: (
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            Click the button below to grant webcam access.
+            Run a single check to confirm your browser, camera, and microphone
+            are ready, then capture your identity photo.
           </p>
-          <button
-            onClick={checkWebcam}
-            className="px-4 py-2 bg-primary text-primary-foreground text-sm rounded-lg hover:bg-primary-700 transition"
-          >
-            Check Webcam
-          </button>
-          {webcamOk !== null && (
-            <div className="flex items-center gap-2 mt-2">
-              {webcamOk ? (
-                <CheckCircle className="h-5 w-5 text-success" />
-              ) : (
-                <XCircle className="h-5 w-5 text-danger" />
-              )}
-              <span className="text-sm">
-                {webcamOk ? "Webcam access granted" : "Webcam access denied"}
-              </span>
-            </div>
-          )}
 
+          <button
+            onClick={runAllChecks}
+            disabled={checking}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg hover:bg-primary-700 transition disabled:opacity-50"
+          >
+            {checking ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <CheckCircle className="h-4 w-4" />
+            )}
+            {checking ? "Checking…" : "Check All"}
+          </button>
+
+          {/* Per-item readiness status */}
+          <div className="space-y-2">
+            {readinessItems.map((item) => {
+              const Icon = item.icon
+              return (
+                <div
+                  key={item.key}
+                  className="flex items-center justify-between gap-3 rounded-lg border border-white/[0.07] bg-muted/20 px-3 py-2"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Icon className="h-4 w-4 text-slate-400" strokeWidth={1.5} />
+                    <span className="text-sm">{item.label}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {item.ready === null ? (
+                      <span className="text-xs text-slate-500">Not checked</span>
+                    ) : item.ready ? (
+                      <span className="inline-flex items-center gap-1 text-xs text-success">
+                        <CheckCircle className="h-4 w-4" /> Ready
+                      </span>
+                    ) : (
+                      <>
+                        <span className="inline-flex items-center gap-1 text-xs text-danger">
+                          <XCircle className="h-4 w-4" /> Not Ready
+                        </span>
+                        <button
+                          onClick={item.retry}
+                          className="inline-flex items-center gap-1 text-xs text-[#6366f1] hover:underline"
+                        >
+                          <RefreshCw className="h-3 w-3" /> Try Again
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          {/* Identity verification photo (mandatory) — reuses the camera stream */}
           <div className="rounded-lg border border-border bg-muted/30 p-3">
-            <p className="text-xs text-muted-foreground mb-2">Identity verification photo (mandatory)</p>
+            <p className="text-xs text-muted-foreground mb-2">
+              Identity verification photo (mandatory)
+            </p>
             <video
-              ref={verificationVideoRef}
+              ref={setVideoNode}
               autoPlay
               muted
               playsInline
@@ -327,68 +385,8 @@ export default function PreflightCheck() {
       ),
     },
     {
-      icon: Mic,
-      title: "Microphone Permission",
-      content: (
-        <div className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            Click the button below to grant microphone access.
-          </p>
-          <button
-            onClick={checkMic}
-            className="px-4 py-2 bg-primary text-primary-foreground text-sm rounded-lg hover:bg-primary-700 transition"
-          >
-            Check Microphone
-          </button>
-          {micOk !== null && (
-            <div className="flex items-center gap-2 mt-2">
-              {micOk ? (
-                <CheckCircle className="h-5 w-5 text-success" />
-              ) : (
-                <XCircle className="h-5 w-5 text-danger" />
-              )}
-              <span className="text-sm">
-                {micOk
-                  ? "Microphone access granted"
-                  : "Microphone access denied"}
-              </span>
-            </div>
-          )}
-        </div>
-      ),
-    },
-    {
-      icon: Maximize,
-      title: "Fullscreen Test",
-      content: (
-        <div className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            Click below to test entering fullscreen mode.
-          </p>
-          <button
-            onClick={checkFullscreen}
-            className="px-4 py-2 bg-primary text-primary-foreground text-sm rounded-lg hover:bg-primary-700 transition"
-          >
-            Enter Fullscreen
-          </button>
-          {fsOk !== null && (
-            <div className="flex items-center gap-2 mt-2">
-              {fsOk ? (
-                <CheckCircle className="h-5 w-5 text-success" />
-              ) : (
-                <XCircle className="h-5 w-5 text-danger" />
-              )}
-              <span className="text-sm">
-                {fsOk ? "Fullscreen works" : "Fullscreen failed"}
-              </span>
-            </div>
-          )}
-        </div>
-      ),
-    },
-    {
       icon: FileText,
-      title: "Rules Agreement",
+      title: "Rules & Terms",
       content: (
         <div className="space-y-4">
           <div className="bg-muted rounded-lg p-4 text-sm space-y-2">
@@ -415,7 +413,7 @@ export default function PreflightCheck() {
               className="h-4 w-4 accent-primary rounded"
             />
             <span className="text-sm font-medium">
-              I agree to the proctoring terms
+              I have read and understood the rules.
             </span>
           </label>
         </div>
@@ -528,21 +526,22 @@ export default function PreflightCheck() {
                   {step < steps.length - 1 ? (
                     <button
                       onClick={() => setStep(step + 1)}
-                      className="inline-flex items-center gap-2 px-5 py-2 bg-[#6366f1] hover:bg-[#4f46e5] text-white text-sm font-semibold rounded-full transition-all duration-200 hover:-translate-y-[1px] hover:shadow-[0_6px_20px_-6px_rgba(99,102,241,0.5)] active:scale-[0.97]"
+                      disabled={!readinessComplete || outsideWindow}
+                      className="inline-flex items-center gap-2 px-5 py-2 bg-[#6366f1] hover:bg-[#4f46e5] text-white text-sm font-semibold rounded-full transition-all duration-200 hover:-translate-y-[1px] hover:shadow-[0_6px_20px_-6px_rgba(99,102,241,0.5)] active:scale-[0.97] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:shadow-none"
                     >
-                      Next <ArrowRight className="h-4 w-4" strokeWidth={2} />
+                      Continue <ArrowRight className="h-4 w-4" strokeWidth={2} />
                     </button>
                   ) : (
                     <button
                       onClick={handleBeginExam}
-                      disabled={!allChecksPassed || outsideWindow || createAttempt.isPending || attemptsLoading}
+                      disabled={!canStart || outsideWindow || createAttempt.isPending || attemptsLoading}
                       className="group relative inline-flex items-center gap-2.5 px-6 py-2.5 rounded-full font-semibold text-sm transition-all duration-200 active:scale-[0.97] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:shadow-none"
                       style={{
-                        background: (!allChecksPassed || outsideWindow)
+                        background: (!canStart || outsideWindow)
                           ? "rgba(255,255,255,0.07)"
                           : "linear-gradient(135deg, #10b981 0%, #059669 100%)",
-                        color: (!allChecksPassed || outsideWindow) ? "rgba(255,255,255,0.3)" : "#fff",
-                        boxShadow: (!allChecksPassed || outsideWindow)
+                        color: (!canStart || outsideWindow) ? "rgba(255,255,255,0.3)" : "#fff",
+                        boxShadow: (!canStart || outsideWindow)
                           ? "none"
                           : "0 0 0 0 rgba(16,185,129,0)",
                       }}
@@ -554,7 +553,7 @@ export default function PreflightCheck() {
                           <ArrowRight className="h-3 w-3" strokeWidth={2.5} />
                         </span>
                       )}
-                      {createAttempt.isPending ? "Starting…" : "Begin Exam"}
+                      {createAttempt.isPending ? "Starting…" : "Start Exam"}
                     </button>
                   )}
                 </div>

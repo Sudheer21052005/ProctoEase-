@@ -129,8 +129,11 @@ async def _build_answers_response(
             question_id=uuid.UUID(v["question_id"]),
             selected_option_ids=v.get("selected_option_ids"),
             text_answer=v.get("text_answer"),
+            language_id=v.get("language_id"),
             is_correct=v.get("is_correct"),
             points_earned=v.get("points_earned"),
+            cases_passed=v.get("cases_passed"),
+            total_cases=v.get("total_cases"),
         )
         for v in raw.values()
     ]
@@ -458,6 +461,8 @@ async def grade_code_question(
         "language_id": language_id,
         "is_correct": is_correct,
         "points_earned": points_earned,
+        "cases_passed": passed,
+        "total_cases": total_cases,
     }
     attempt.answers = raw_answers
     flag_modified(attempt, "answers")

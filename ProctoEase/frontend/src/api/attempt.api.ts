@@ -24,6 +24,8 @@ export interface AnswerRead {
   language_id?: number | null
   is_correct?: boolean | null
   points_earned?: number | null
+  cases_passed?: number | null
+  total_cases?: number | null
 }
 
 export interface AnswersResponse {

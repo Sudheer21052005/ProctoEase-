@@ -1,8 +1,9 @@
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Editor } from "@monaco-editor/react"
 import {
-  Play, Loader2, Maximize2, Minimize2, CheckCircle2, XCircle,
-  AlertTriangle, ChevronDown, ChevronUp, Lock,
+  Play, Loader2, Maximize2, Minimize2,
+  Terminal, CheckCircle2, XCircle, ChevronDown, ChevronUp,
+  Edit3, Maximize, Minimize,
 } from "lucide-react"
 import {
   isTerminalCodeStatus,
@@ -45,19 +46,29 @@ export default function CodeEditor({
   initialLanguageId,
   onChange,
   publicTestCases = [],
-  hiddenCasesCount = 0,
 }: CodeEditorProps) {
   const { data: languages = [], isError: languagesError } = useCodeLanguages()
   const runSubmission = useRunCodeSubmission()
   const runPublic = useRunCodePublic()
+
   const [languageId, setLanguageId] = useState<number>(initialLanguageId ?? 71)
   const [code, setCode] = useState(() => initialCode || PYTHON_STUB)
   const [isFullscreen, setIsFullscreen] = useState(false)
+
+  // Terminal state
+  const [isTerminalOpen, setIsTerminalOpen] = useState(false)
+  const [isMaximized, setIsMaximized] = useState(false)
+  const [activeTab, setActiveTab] = useState<"terminal" | "results" | "custom_input">("terminal")
   const [submission, setSubmission] = useState<CodeSubmission | null>(null)
-  const [publicRunResults, setPublicRunResults] = useState<CodeRunCaseResult[] | null>(null)
-  const [activeTab, setActiveTab] = useState<"results" | "terminal">("terminal")
+  const [publicResults, setPublicResults] = useState<CodeRunCaseResult[] | null>(null)
   const [customInput, setCustomInput] = useState("")
-  const [showCustomInput, setShowCustomInput] = useState(false)
+
+  // Pre-fill custom input with first public test case input if empty
+  useEffect(() => {
+    if (!customInput && publicTestCases.length > 0 && publicTestCases[0].input) {
+      setCustomInput(publicTestCases[0].input)
+    }
+  }, [publicTestCases, customInput])
 
   const handleLanguageChange = (newLangId: number) => {
     setLanguageId(newLangId)
@@ -76,9 +87,10 @@ export default function CodeEditor({
       return
     }
 
-    setSubmission(null)
-    setPublicRunResults(null)
+    // Automatically expand the terminal upward
+    setIsTerminalOpen(true)
     setActiveTab("terminal")
+    setSubmission(null)
 
     // Determine stdin: custom input > first public test case > empty
     const stdin =
@@ -86,7 +98,8 @@ export default function CodeEditor({
       (publicTestCases.length > 0 ? String(publicTestCases[0].input) : "")
 
     try {
-      const result = await runSubmission.mutateAsync({
+      // 1. Run single execution (with custom stdin / sample stdin)
+      const subPromise = runSubmission.mutateAsync({
         attemptId,
         data: {
           source_code: code,
@@ -96,6 +109,25 @@ export default function CodeEditor({
         },
       })
 
+      // 2. Also evaluate public test cases if available
+      let pubPromise: Promise<unknown> = Promise.resolve(null)
+      if (publicTestCases.length > 0) {
+        pubPromise = runPublic.mutateAsync({
+          attemptId,
+          data: {
+            source_code: code,
+            language_id: languageId,
+            question_id: questionId,
+          },
+        }).then((res) => {
+          setPublicResults(res.cases || [])
+        }).catch((err) => {
+          console.warn("Public test run error:", err)
+        })
+      }
+
+      const [result] = await Promise.all([subPromise, pubPromise])
+
       if (!isTerminalCodeStatus(result.status)) {
         toast.warning("Execution is taking longer than expected. Please check again shortly.")
       }
@@ -103,34 +135,6 @@ export default function CodeEditor({
       setSubmission(result)
     } catch (err) {
       toast.error("Code execution failed")
-      console.error(err)
-    }
-  }
-
-  const handleRunPublic = async () => {
-    if (!code.trim()) {
-      toast.error("Code cannot be empty")
-      return
-    }
-    if (publicTestCases.length === 0) {
-      toast.info("No public sample cases for this question")
-      return
-    }
-    setPublicRunResults(null)
-    setSubmission(null)
-    setActiveTab("results")
-    try {
-      const result = await runPublic.mutateAsync({
-        attemptId,
-        data: {
-          source_code: code,
-          language_id: languageId,
-          question_id: questionId,
-        },
-      })
-      setPublicRunResults(result.cases)
-    } catch (err) {
-      toast.error("Public test run failed")
       console.error(err)
     }
   }
@@ -156,31 +160,42 @@ export default function CodeEditor({
     }
   }
 
-  // Status badge helpers
+  const passedPublicCount = publicResults
+    ? publicResults.filter((r) => r.passed).length
+    : submission?.status === "accepted"
+    ? publicTestCases.length
+    : 0
+
   const statusBadgeClass = (status: string) => {
-    if (status === "accepted") return "bg-green-500/20 text-green-400"
-    if (status === "runtime_error") return "bg-orange-500/20 text-orange-400"
-    if (status === "compilation_error") return "bg-red-600/20 text-red-400"
-    if (status === "time_limit_exceeded") return "bg-amber-500/20 text-amber-400"
-    if (status === "queued" || status === "processing") return "bg-amber-500/20 text-amber-400"
-    return "bg-red-500/20 text-red-400"
+    if (status === "accepted") return "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+    if (status === "runtime_error") return "bg-orange-500/20 text-orange-400 border border-orange-500/30"
+    if (status === "compilation_error") return "bg-red-600/20 text-red-400 border border-red-600/30"
+    if (status === "time_limit_exceeded") return "bg-amber-500/20 text-amber-400 border border-amber-500/30"
+    return "bg-red-500/20 text-red-400 border border-red-500/30"
   }
+
+  // Terminal height: collapsed (38px), normal (240px), maximized (380px)
+  const terminalHeightStyle = !isTerminalOpen
+    ? "h-9"
+    : isMaximized
+    ? "h-96"
+    : "h-60"
 
   return (
     <div
-      className={`flex flex-col bg-card border border-border overflow-hidden ${
+      className={`flex flex-col bg-card border border-border overflow-hidden h-full min-h-0 ${
         isFullscreen
           ? "fixed inset-0 z-50 rounded-none bg-background"
-          : "h-full min-h-0"
+          : "relative"
       }`}
     >
-      {/* Toolbar */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-muted/30 shrink-0">
+      {/* Top Toolbar */}
+      <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-[#161b27] shrink-0">
         <div className="flex items-center gap-3">
           <select
             value={languageId}
             onChange={(e) => handleLanguageChange(Number(e.target.value))}
-            className="px-3 py-1.5 rounded-lg border border-border bg-background text-sm font-medium focus:ring-2 focus:ring-primary/30"
+            className="px-3 py-1.5 rounded-lg border border-border bg-[#1c2333] text-sm font-medium text-slate-200 focus:ring-2 focus:ring-primary/30"
             disabled={languagesError}
           >
             {languages.map((l) => (
@@ -190,10 +205,11 @@ export default function CodeEditor({
             ))}
           </select>
         </div>
+
         <div className="flex items-center gap-2">
           <button
             onClick={toggleFullscreen}
-            className="p-1.5 rounded-md hover:bg-muted text-muted-foreground mr-2"
+            className="p-1.5 rounded-md hover:bg-white/[0.06] text-slate-400 hover:text-slate-200 mr-1"
             title={isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
           >
             {isFullscreen ? (
@@ -202,36 +218,23 @@ export default function CodeEditor({
               <Maximize2 className="h-4 w-4" />
             )}
           </button>
+
           <button
             onClick={handleRunCode}
-            disabled={runSubmission.isPending || runPublic.isPending || !code.trim()}
-            className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-primary text-primary-foreground text-sm font-bold rounded-lg hover:bg-primary-700 disabled:opacity-50 transition"
+            disabled={runSubmission.isPending || !code.trim()}
+            className="inline-flex items-center gap-2 px-4 py-1.5 bg-[#6366f1] hover:bg-[#4f46e5] text-white text-sm font-semibold rounded-lg shadow-sm disabled:opacity-50 transition-all hover:-translate-y-[0.5px]"
           >
             {runSubmission.isPending ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
-              <Play className="h-4 w-4" fill="currentColor" />
+              <Play className="h-4 w-4 fill-currentColor" />
             )}
-            Run Code
+            <span>Run Code</span>
           </button>
-          {publicTestCases.length > 0 && (
-            <button
-              onClick={handleRunPublic}
-              disabled={runPublic.isPending || runSubmission.isPending || !code.trim()}
-              className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-secondary text-secondary-foreground text-sm font-bold rounded-lg hover:bg-secondary/80 disabled:opacity-50 transition"
-            >
-              {runPublic.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Play className="h-4 w-4" fill="currentColor" />
-              )}
-              Run Sample Tests
-            </button>
-          )}
         </div>
       </div>
 
-      {/* Monaco Editor — flex-1 so it takes remaining space */}
+      {/* Monaco Code Editor */}
       <div className="relative flex-1 min-h-0 overflow-hidden">
         <Editor
           height="100%"
@@ -262,205 +265,293 @@ export default function CodeEditor({
         )}
       </div>
 
-      {/* Bottom panel — custom input + output/results, bounded height */}
-      <div className="shrink-0 border-t border-border" style={{ maxHeight: "260px" }}>
-        {/* Custom input toggle */}
-        <div className="px-3 py-1.5 border-b border-border bg-muted/20 flex items-center justify-between">
-          <button
-            onClick={() => setShowCustomInput(!showCustomInput)}
-            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-          >
-            {showCustomInput ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-            Custom Input
-            {customInput.trim() && (
-              <span className="ml-1 px-1.5 py-0.5 rounded bg-primary/20 text-primary text-[10px] font-medium">set</span>
-            )}
-          </button>
-          {/* Tab switcher */}
+      {/* Adjustable Bottom Terminal Panel (Slide-up / Retract with Arrow) */}
+      <div
+        className={`border-t border-border bg-[#10141d] flex flex-col shrink-0 transition-all duration-200 ${terminalHeightStyle}`}
+      >
+        {/* Terminal Header Bar */}
+        <div className="flex items-center justify-between px-3 h-9 bg-[#161b27] border-b border-border/80 shrink-0 select-none">
+          {/* Tab Navigation */}
           <div className="flex items-center gap-1">
             <button
-              onClick={() => setActiveTab("terminal")}
-              className={`text-xs px-2 py-0.5 rounded ${activeTab === "terminal" ? "bg-primary/20 text-primary" : "text-muted-foreground hover:text-foreground"}`}
+              onClick={() => {
+                setActiveTab("terminal")
+                setIsTerminalOpen(true)
+              }}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded text-xs font-semibold transition-colors ${
+                activeTab === "terminal" && isTerminalOpen
+                  ? "bg-primary/20 text-primary border border-primary/30"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-white/[0.04]"
+              }`}
             >
-              Terminal
+              <Terminal className="h-3.5 w-3.5" />
+              <span>Terminal</span>
             </button>
+
             {publicTestCases.length > 0 && (
               <button
-                onClick={() => setActiveTab("results")}
-                className={`text-xs px-2 py-0.5 rounded ${activeTab === "results" ? "bg-primary/20 text-primary" : "text-muted-foreground hover:text-foreground"}`}
+                onClick={() => {
+                  setActiveTab("results")
+                  setIsTerminalOpen(true)
+                }}
+                className={`flex items-center gap-1.5 px-3 py-1 rounded text-xs font-semibold transition-colors ${
+                  activeTab === "results" && isTerminalOpen
+                    ? "bg-primary/20 text-primary border border-primary/30"
+                    : "text-slate-400 hover:text-slate-200 hover:bg-white/[0.04]"
+                }`}
               >
-                Test Results
-                {publicRunResults && (
-                  <span className={`ml-1 font-bold ${
-                    publicRunResults.every(r => r.passed) ? "text-green-400" : "text-red-400"
-                  }`}>
-                    {publicRunResults.filter(r => r.passed).length}/{publicRunResults.length}
-                  </span>
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                <span>
+                  Test Results
+                  {submission && (
+                    <span className="ml-1 text-[11px] font-mono text-emerald-400">
+                      ({passedPublicCount}/{publicTestCases.length})
+                    </span>
+                  )}
+                </span>
+              </button>
+            )}
+
+            <button
+              onClick={() => {
+                setActiveTab("custom_input")
+                setIsTerminalOpen(true)
+              }}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded text-xs font-semibold transition-colors ${
+                activeTab === "custom_input" && isTerminalOpen
+                  ? "bg-primary/20 text-primary border border-primary/30"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-white/[0.04]"
+              }`}
+            >
+              <Edit3 className="h-3.5 w-3.5" />
+              <span>Custom Input</span>
+              {customInput.trim() && (
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />
+              )}
+            </button>
+          </div>
+
+          {/* Right Controls: Status & Expand/Retract Arrow */}
+          <div className="flex items-center gap-2">
+            {runSubmission.isPending ? (
+              <div className="flex items-center gap-1.5 text-xs text-primary font-mono">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <span>Running...</span>
+              </div>
+            ) : submission ? (
+              <div className="flex items-center gap-2 text-xs font-mono">
+                <span className={`px-2 py-0.5 rounded font-bold text-[10px] ${statusBadgeClass(submission.status)}`}>
+                  {submission.status.replace(/_/g, " ").toUpperCase()}
+                </span>
+                {submission.time_sec != null && (
+                  <span className="text-slate-400 hidden sm:inline">{submission.time_sec}s</span>
+                )}
+                {submission.memory_kb != null && (
+                  <span className="text-slate-400 hidden sm:inline">{submission.memory_kb} KB</span>
+                )}
+              </div>
+            ) : (
+              <span className="text-[11px] text-slate-500 hidden sm:inline">
+                {isTerminalOpen ? "Standard Output / Test Results" : "Click to expand terminal"}
+              </span>
+            )}
+
+            {/* Maximize / Normal Toggle */}
+            {isTerminalOpen && (
+              <button
+                onClick={() => setIsMaximized(!isMaximized)}
+                className="p-1 rounded text-slate-400 hover:text-slate-200 hover:bg-white/[0.06] transition"
+                title={isMaximized ? "Restore Height" : "Maximize Terminal"}
+              >
+                {isMaximized ? (
+                  <Minimize className="h-3.5 w-3.5" />
+                ) : (
+                  <Maximize className="h-3.5 w-3.5" />
                 )}
               </button>
             )}
+
+            {/* Adjustable Retract / Expand Arrow */}
+            <button
+              onClick={() => setIsTerminalOpen(!isTerminalOpen)}
+              className="p-1 rounded text-slate-400 hover:text-slate-200 hover:bg-white/[0.06] transition"
+              title={isTerminalOpen ? "Retract Terminal (Collapse)" : "Expand Terminal"}
+            >
+              {isTerminalOpen ? (
+                <ChevronDown className="h-4 w-4" />
+              ) : (
+                <ChevronUp className="h-4 w-4" />
+              )}
+            </button>
           </div>
         </div>
 
-        {/* Custom input textarea */}
-        {showCustomInput && (
-          <div className="px-3 py-2 border-b border-border bg-muted/20">
-            <textarea
-              value={customInput}
-              onChange={(e) => setCustomInput(e.target.value)}
-              placeholder={
-                publicTestCases.length > 0
-                  ? `Custom stdin (leave empty to use first sample: ${String(publicTestCases[0].input).substring(0, 30)}${String(publicTestCases[0].input).length > 30 ? "…" : ""})`
-                  : "Custom stdin for Run Code"
-              }
-              className="w-full text-xs font-mono bg-zinc-950 border border-border rounded p-2 text-zinc-300 resize-none focus:outline-none focus:ring-1 focus:ring-primary/40"
-              rows={2}
-            />
-          </div>
-        )}
-
-        {/* Output area */}
-        <div className="overflow-y-auto bg-zinc-950 text-zinc-300 font-mono text-xs p-3" style={{ maxHeight: showCustomInput ? "130px" : "200px" }}>
-          {activeTab === "terminal" && (
-            <>
-              {!submission && !runSubmission.isPending && (
-                <p className="text-zinc-600 italic">Click "Run Code" to execute…</p>
-              )}
-              {runSubmission.isPending && (
-                <div className="flex items-center gap-2 text-primary">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  <span>Executing in sandbox…</span>
-                </div>
-              )}
-              {submission && (
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className={`px-2 py-0.5 rounded text-xs font-bold ${statusBadgeClass(submission.status)}`}>
-                      {submission.status.replace(/_/g, " ").toUpperCase()}
-                    </span>
-                    {submission.time_sec != null && (
-                      <span className="text-zinc-500">{submission.time_sec}s</span>
-                    )}
-                    {submission.memory_kb != null && (
-                      <span className="text-zinc-500">{submission.memory_kb} KB</span>
-                    )}
-                    {submission.exit_code != null && (
-                      <span className="text-zinc-500">Exit {submission.exit_code}</span>
-                    )}
+        {/* Terminal Body (Scrollable, rendered when open) */}
+        {isTerminalOpen && (
+          <div className="flex-1 overflow-y-auto p-3 text-xs font-mono">
+            {/* Tab 1: Terminal Stdout / Diagnostics */}
+            {activeTab === "terminal" && (
+              <div className="space-y-3">
+                {runSubmission.isPending && (
+                  <div className="flex items-center gap-2 text-slate-400 py-4">
+                    <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                    <span>Executing code on runner...</span>
                   </div>
+                )}
 
-                  {submission.compile_output && (
-                    <div>
-                      <p className="text-red-400 mb-1">Compilation Error:</p>
-                      <pre className="whitespace-pre-wrap text-zinc-300 break-words">{submission.compile_output}</pre>
-                    </div>
-                  )}
+                {submission?.compile_output && (
+                  <div className="rounded-lg border border-red-500/30 bg-red-950/20 p-2.5">
+                    <p className="text-red-400 font-bold uppercase tracking-wider text-[11px] mb-1">
+                      Compilation Output:
+                    </p>
+                    <pre className="text-red-300 whitespace-pre-wrap">{submission.compile_output}</pre>
+                  </div>
+                )}
 
-                  {submission.stderr && (
-                    <div>
-                      <p className="text-orange-400 mb-1">Runtime Error (Stderr):</p>
-                      <pre className="whitespace-pre-wrap text-zinc-300 break-words">{submission.stderr}</pre>
-                    </div>
-                  )}
+                {submission?.stderr && (
+                  <div className="rounded-lg border border-orange-500/30 bg-orange-950/20 p-2.5">
+                    <p className="text-orange-400 font-bold uppercase tracking-wider text-[11px] mb-1">
+                      Runtime Error / Stderr:
+                    </p>
+                    <pre className="text-orange-300 whitespace-pre-wrap">{submission.stderr}</pre>
+                  </div>
+                )}
 
-                  {submission.stdout && (
-                    <div>
-                      <p className="text-zinc-500 mb-1">Stdout:</p>
-                      <pre className="whitespace-pre-wrap text-zinc-300 break-words">{submission.stdout}</pre>
-                    </div>
-                  )}
+                {submission?.stdout ? (
+                  <div>
+                    <pre className="text-slate-100 whitespace-pre-wrap leading-relaxed">
+                      {submission.stdout}
+                    </pre>
+                  </div>
+                ) : submission && !submission.compile_output && !submission.stderr ? (
+                  <p className="text-slate-500 italic">No output.</p>
+                ) : !runSubmission.isPending && !submission ? (
+                  <p className="text-slate-500 italic">Click "Run Code" to execute your program.</p>
+                ) : null}
+              </div>
+            )}
 
-                  {!submission.stdout && !submission.stderr && !submission.compile_output && (
-                    <p className="text-zinc-600 italic">No output.</p>
-                  )}
-                </div>
-              )}
-            </>
-          )}
+            {/* Tab 2: Test Results */}
+            {activeTab === "results" && (
+              <div className="space-y-3">
+                {publicTestCases.map((tc, idx) => {
+                  const caseRes = publicResults?.find(
+                    (r) => String(r.input).trim() === String(tc.input).trim()
+                  ) || (publicResults && publicResults[idx])
+                  const hasRun = Boolean(caseRes || submission)
+                  const isPassed = caseRes
+                    ? caseRes.passed
+                    : submission?.status === "accepted"
+                  const actual = caseRes?.actual != null
+                    ? String(caseRes.actual)
+                    : isPassed
+                    ? String(tc.expected)
+                    : submission?.compile_output
+                    ? "[Compilation Error]"
+                    : submission?.stderr
+                    ? "[Runtime Error]"
+                    : submission?.stdout?.trim() || "—"
 
-          {activeTab === "results" && (
-            <>
-              {runPublic.isPending && (
-                <div className="flex items-center gap-2 text-primary">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  <span>Running sample tests…</span>
-                </div>
-              )}
-
-              {!publicRunResults && !runPublic.isPending && (
-                <p className="text-zinc-600 italic">Click "Run Sample Tests" to run all public cases…</p>
-              )}
-
-              {publicRunResults && (
-                <div className="space-y-2">
-                  {publicTestCases.map((tc, idx) => {
-                    const result = publicRunResults[idx]
-                    if (!result) return null
-                    const statusIcon =
-                      result.status === "accepted" && result.passed ? (
-                        <CheckCircle2 className="h-3.5 w-3.5 text-green-400" />
-                      ) : result.status === "runtime_error" ? (
-                        <AlertTriangle className="h-3.5 w-3.5 text-orange-400" />
-                      ) : result.status === "compilation_error" ? (
-                        <AlertTriangle className="h-3.5 w-3.5 text-red-400" />
-                      ) : (
-                        <XCircle className="h-3.5 w-3.5 text-red-400" />
-                      )
-
-                    return (
-                      <div
-                        key={idx}
-                        className={`rounded border p-2 ${
-                          result.passed
-                            ? "border-green-500/30 bg-green-500/5"
-                            : "border-red-500/30 bg-red-500/5"
-                        }`}
-                      >
-                        <div className="flex items-center gap-1.5 mb-1">
-                          {statusIcon}
-                          <span className="font-semibold text-zinc-300">Case {idx + 1}</span>
-                          <span className={`ml-auto text-[10px] font-bold ${result.passed ? "text-green-400" : "text-red-400"}`}>
-                            {result.status.replace(/_/g, " ").toUpperCase()}
+                  return (
+                    <div
+                      key={idx}
+                      className={`rounded-lg border p-2.5 ${
+                        !hasRun
+                          ? "border-white/[0.08] bg-white/[0.02]"
+                          : isPassed
+                          ? "border-emerald-500/30 bg-emerald-500/5"
+                          : "border-red-500/30 bg-red-500/5"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="font-semibold text-slate-200 flex items-center gap-1.5">
+                          {hasRun ? (
+                            isPassed ? (
+                              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+                            ) : (
+                              <XCircle className="h-3.5 w-3.5 text-red-400" />
+                            )
+                          ) : (
+                            <span className="w-3.5 h-3.5 rounded-full border border-slate-600 inline-block" />
+                          )}
+                          Sample Case {idx + 1}
+                        </span>
+                        {hasRun && (
+                          <span
+                            className={`px-2 py-0.5 rounded font-bold text-[10px] ${
+                              isPassed
+                                ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+                                : "bg-red-500/20 text-red-400 border border-red-500/30"
+                            }`}
+                          >
+                            {isPassed ? "PASSED" : "FAILED"}
                           </span>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 text-[11px]">
+                        <div>
+                          <span className="text-slate-500 block mb-0.5">Input:</span>
+                          <pre className="text-slate-200 bg-black/30 p-1.5 rounded">{tc.input}</pre>
                         </div>
-                        <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
-                          <span className="text-zinc-500">Input:</span>
-                          <pre className="text-zinc-300 whitespace-pre-wrap">{result.input}</pre>
-                          <span className="text-zinc-500">Expected:</span>
-                          <pre className="text-zinc-300 whitespace-pre-wrap">{String(result.expected)}</pre>
-                          <span className="text-zinc-500">Actual:</span>
-                          <pre className={`whitespace-pre-wrap ${result.passed ? "text-green-300" : "text-red-300"}`}>
-                            {result.actual || "(no output)"}
+                        <div>
+                          <span className="text-slate-500 block mb-0.5">Expected:</span>
+                          <pre className="text-slate-200 bg-black/30 p-1.5 rounded">{String(tc.expected)}</pre>
+                        </div>
+                        <div>
+                          <span className="text-slate-500 block mb-0.5">Actual:</span>
+                          <pre
+                            className={`p-1.5 rounded ${
+                              isPassed ? "text-emerald-300 bg-emerald-950/30" : "text-red-300 bg-red-950/30"
+                            }`}
+                          >
+                            {actual}
                           </pre>
                         </div>
                       </div>
-                    )
-                  })}
-
-                  {/* Hidden test case indicator */}
-                  {hiddenCasesCount > 0 && (
-                    <div className="flex items-center gap-2 rounded border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-zinc-500">
-                      <Lock className="h-3.5 w-3.5 shrink-0" />
-                      <span className="text-xs">
-                        {hiddenCasesCount} hidden test {hiddenCasesCount === 1 ? "case" : "cases"} will be evaluated during final submission.
-                      </span>
                     </div>
-                  )}
-                </div>
-              )}
+                  )
+                })}
+              </div>
+            )}
 
-              {/* Static hidden indicator when no run yet */}
-              {!publicRunResults && !runPublic.isPending && hiddenCasesCount > 0 && (
-                <div className="flex items-center gap-2 mt-2 rounded border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-zinc-500">
-                  <Lock className="h-3.5 w-3.5 shrink-0" />
-                  <span className="text-xs">
-                    {hiddenCasesCount} hidden test {hiddenCasesCount === 1 ? "case" : "cases"} evaluated during final submission only.
+            {/* Tab 3: Custom Input */}
+            {activeTab === "custom_input" && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-slate-400">
+                    Standard input (stdin) to pass to your program:
                   </span>
+                  <div className="flex items-center gap-1.5">
+                    {publicTestCases.map((tc, idx) => (
+                      <button
+                        key={idx}
+                        onClick={() => setCustomInput(tc.input)}
+                        className="text-[11px] px-2 py-0.5 rounded border border-white/[0.08] bg-white/[0.04] text-slate-300 hover:bg-white/[0.08] transition"
+                      >
+                        Use Sample {idx + 1}
+                      </button>
+                    ))}
+                    {customInput && (
+                      <button
+                        onClick={() => setCustomInput("")}
+                        className="text-[11px] px-2 py-0.5 rounded border border-white/[0.08] text-slate-400 hover:text-red-400 transition"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
                 </div>
-              )}
-            </>
-          )}
-        </div>
+                <textarea
+                  value={customInput}
+                  onChange={(e) => setCustomInput(e.target.value)}
+                  placeholder="Type standard input here (e.g. 12 8)..."
+                  rows={4}
+                  className="w-full text-xs font-mono bg-zinc-950 border border-white/[0.1] rounded p-2 text-zinc-200 resize-none focus:outline-none focus:ring-1 focus:ring-primary/50"
+                />
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )

@@ -838,6 +838,44 @@ async def generate_integrity_report_pdf(
                     memory_str = f"{latest_sub.memory_kb} KB" if latest_sub.memory_kb is not None else "N/A"
                     pdf.cell(0, 6, pdf.clean_text(f"  Time: {time_str}  Memory: {memory_str}"), new_x="LMARGIN", new_y="NEXT")
                 pdf.ln(2)
+
+                # Test Case Evaluation (all test cases: public and hidden)
+                test_cases = []
+                if q.correct_answer and isinstance(q.correct_answer, dict):
+                    test_cases = q.correct_answer.get("test_cases", [])
+                if test_cases:
+                    ans = raw_answers.get(str(q.id))
+                    is_all_passed = bool(ans and ans.get("is_correct"))
+                    passed_count = ans.get("cases_passed") if ans else None
+                    if passed_count is None:
+                        passed_count = len(test_cases) if is_all_passed else (1 if (latest_sub and latest_sub.status == "accepted") else 0)
+
+                    tc_rows = []
+                    for idx, tc in enumerate(test_cases):
+                        is_pub = tc.get("is_public", True)
+                        label = f"Case {idx + 1} ({'Public' if is_pub else 'Hidden'})"
+                        case_ok = is_all_passed or (idx < passed_count)
+                        tc_rows.append([
+                            label,
+                            str(tc.get("input", "")),
+                            str(tc.get("expected", "")),
+                            "PASSED" if case_ok else "FAILED",
+                        ])
+
+                    pdf.set_font(pdf.default_font, "B", 9)
+                    pdf.cell(0, 5, "  Test Case Evaluation:", new_x="LMARGIN", new_y="NEXT")
+                    tc_tints = {"PASSED": GREEN_FILL, "FAILED": RED_FILL}
+                    pdf.add_table(
+                        ["Test Case", "Input", "Expected", "Result"],
+                        tc_rows,
+                        col_ratios=[45, 50, 45, 25],
+                        aligns=["L", "L", "L", "C"],
+                        cell_style=lambda i, x, y, w, h, row: (
+                            _tint_cell(pdf, x, y, w, h, tc_tints.get(row[3]))
+                            if i == 3 else None
+                        ),
+                    )
+                    pdf.ln(2)
             else:
                 pdf.set_font(pdf.default_font, "I", 10)
                 pdf.multi_cell(pdf.epw, 6, pdf.clean_text(f"{q.question_text}: No submissions"), new_x="LMARGIN", new_y="NEXT")

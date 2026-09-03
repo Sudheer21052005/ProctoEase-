@@ -2,6 +2,8 @@ import { useExamStore, type Question } from "@/stores/exam.store"
 import { cn } from "@/lib/utils"
 import { Bookmark } from "lucide-react"
 
+import FormattedText from "@/components/common/FormattedText"
+
 interface QuestionDisplayProps {
   question: Question
 }
@@ -31,22 +33,22 @@ export default function QuestionDisplay({ question }: QuestionDisplayProps) {
       onPaste={(e) => e.preventDefault()}
     >
       {/* Header */}
-      <div className="flex items-start justify-between mb-6">
+      <div className="flex items-start justify-between mb-4">
         <div>
-          <span className="text-xs font-medium text-muted-foreground">
+          <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
             Question {question.question_number}
           </span>
-          <span className="text-xs ml-2 text-primary font-medium">
+          <span className="text-xs ml-2 px-2 py-0.5 rounded bg-primary/10 text-primary font-bold">
             {question.marks} mark{question.marks > 1 ? "s" : ""}
           </span>
         </div>
         <button
           onClick={() => toggleReview(question.id)}
           className={cn(
-            "flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition-colors",
+            "flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium transition-colors",
             answer?.is_marked_for_review
-              ? "bg-amber-100 text-amber-700"
-              : "bg-muted text-muted-foreground hover:bg-amber-50"
+              ? "bg-amber-500/20 text-amber-400 border border-amber-500/30"
+              : "bg-muted text-muted-foreground hover:bg-muted/80"
           )}
         >
           <Bookmark className="h-3 w-3" />
@@ -54,10 +56,34 @@ export default function QuestionDisplay({ question }: QuestionDisplayProps) {
         </button>
       </div>
 
-      {/* Question text */}
-      <p className="text-lg font-medium mb-6 leading-relaxed">
-        {question.text}
-      </p>
+      {/* Question text formatted */}
+      <div className="mb-6">
+        <FormattedText text={question.text} />
+      </div>
+
+      {/* Code question: Public Sample Test Cases display in problem pane */}
+      {question.type === "code" && question.public_test_cases && question.public_test_cases.length > 0 && (
+        <div className="mt-6 space-y-4">
+          <h4 className="text-sm font-semibold text-slate-300 uppercase tracking-wider text-xs">Sample Test Cases</h4>
+          <div className="space-y-3">
+            {question.public_test_cases.map((tc, idx) => (
+              <div key={idx} className="rounded-lg border border-white/[0.08] bg-white/[0.03] p-3 text-xs font-mono">
+                <p className="text-slate-400 font-semibold mb-2">Example {idx + 1}</p>
+                <div className="space-y-2">
+                  <div>
+                    <span className="text-slate-500 font-bold block mb-0.5">Input:</span>
+                    <pre className="text-slate-200 whitespace-pre-wrap bg-black/30 p-2 rounded border border-white/[0.05]">{tc.input}</pre>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 font-bold block mb-0.5">Expected Output:</span>
+                    <pre className="text-slate-200 whitespace-pre-wrap bg-black/30 p-2 rounded border border-white/[0.05]">{String(tc.expected)}</pre>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Answer input by type */}
       {(question.type === "mcq" || question.type === "true_false") &&

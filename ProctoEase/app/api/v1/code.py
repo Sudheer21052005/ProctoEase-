@@ -142,9 +142,13 @@ async def run_code_public(
     if not question or question.question_type != "code":
         raise HTTPException(status_code=400, detail="Invalid code question")
 
-    # Extract public test cases
+    # Extract public test cases (all with is_public=True, or first case if none marked)
     test_cases = (question.correct_answer or {}).get("test_cases") or []
-    public_cases = [tc for tc in test_cases if tc.get("is_public")]
+    has_public = any(tc.get("is_public") for tc in test_cases)
+    if not has_public and test_cases:
+        public_cases = [test_cases[0]]
+    else:
+        public_cases = [tc for tc in test_cases if tc.get("is_public")]
     if not public_cases:
         return CodeRunResponse(cases=[])
 

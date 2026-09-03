@@ -28,6 +28,8 @@ class AnswerRead(BaseModel):
     language_id: int | None = None
     is_correct: bool | None = None   # populated after auto-grade
     points_earned: int | None = None
+    cases_passed: int | None = None
+    total_cases: int | None = None
 
 
 class AnswersResponse(BaseModel):

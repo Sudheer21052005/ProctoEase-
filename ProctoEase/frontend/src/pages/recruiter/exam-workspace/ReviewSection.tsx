@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useParams, useSearchParams } from "react-router-dom"
-import { ClipboardList, Loader2 } from "lucide-react"
+import { ClipboardList, Loader2, CheckCircle2, XCircle } from "lucide-react"
 import { useExamAttempts, useAnswers } from "@/hooks/useAttempts"
 import { useQuestionsForExam } from "@/hooks/useQuestions"
 import { useAttemptCodeSubmissions } from "@/hooks/useCodeExecution"
 import FeatureGuard from "@/components/security/FeatureGuard"
+import FormattedText from "@/components/common/FormattedText"
 import type { AnswerRead } from "@/api/attempt.api"
 
 function optionLabel(value: unknown): string {
@@ -166,7 +167,9 @@ export default function ReviewSection() {
                   <span className="text-xs text-muted-foreground">{q.points} points</span>
                 </div>
 
-                <p className="text-sm mb-3">{q.question_text}</p>
+                <div className="mb-4">
+                  <FormattedText text={q.question_text} />
+                </div>
 
                 <div className="grid md:grid-cols-2 gap-3">
                   <div className="rounded-lg border border-border p-3">
@@ -212,14 +215,14 @@ export default function ReviewSection() {
                           {/* Compilation error */}
                           {latestSub?.compile_output && (
                             <div className="rounded bg-red-500/10 border border-red-500/20 p-2">
-                              <p className="text-xs text-red-400 font-semibold mb-1">Compilation Error:</p>
+                              <p className="text-xs text-red-400 font-semibold mb-1">Compilation Output:</p>
                               <pre className="text-xs text-red-300 whitespace-pre-wrap break-words">{latestSub.compile_output}</pre>
                             </div>
                           )}
                           {/* Runtime stderr */}
                           {latestSub?.stderr && !latestSub?.compile_output && (
                             <div className="rounded bg-orange-500/10 border border-orange-500/20 p-2">
-                              <p className="text-xs text-orange-400 font-semibold mb-1">Runtime Error:</p>
+                              <p className="text-xs text-orange-400 font-semibold mb-1">Runtime Error / Stderr:</p>
                               <pre className="text-xs text-orange-300 whitespace-pre-wrap break-words">{latestSub.stderr}</pre>
                             </div>
                           )}
@@ -273,6 +276,133 @@ export default function ReviewSection() {
                     )}
                   </div>
                 </div>
+
+                {/* Test Case Results Section */}
+                {isCode && q.correct_answer && typeof q.correct_answer === "object" && "test_cases" in q.correct_answer && Array.isArray((q.correct_answer as { test_cases?: unknown[] }).test_cases) && (
+                  (() => {
+                    const allCases = ((q.correct_answer as { test_cases: Array<{ input: string; expected: unknown; is_public?: boolean }> }).test_cases) || []
+                    const hasPublic = allCases.some((tc) => tc.is_public === true)
+                    const publicCases = hasPublic
+                      ? allCases.filter((tc) => tc.is_public === true)
+                      : allCases.slice(0, 1)
+                    const hiddenCases = hasPublic
+                      ? allCases.filter((tc) => tc.is_public === false || tc.is_public == null)
+                      : allCases.slice(1)
+
+                    const isAllPassed = answer?.is_correct === true
+                    const hasGrading = answer?.is_correct != null
+                    const casesPassed = answer?.cases_passed ?? (isAllPassed ? allCases.length : 0)
+                    const totalCases = answer?.total_cases ?? allCases.length
+
+                    const publicPassed = isAllPassed
+                      ? publicCases.length
+                      : Math.min(casesPassed, publicCases.length)
+                    const hiddenPassed = isAllPassed
+                      ? hiddenCases.length
+                      : Math.max(0, casesPassed - publicCases.length)
+
+                    const latestSub = codeForQuestion[0]
+
+                    return (
+                      <div className="mt-4 pt-4 border-t border-border">
+                        <div className="flex items-center justify-between mb-3">
+                          <h4 className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                            Test Case Results
+                          </h4>
+                          <div className="flex items-center gap-3 text-xs font-mono">
+                            <span className="text-muted-foreground">
+                              Public Tests:{" "}
+                              <strong className={publicPassed === publicCases.length ? "text-green-400" : "text-amber-400"}>
+                                {publicPassed} / {publicCases.length} Passed
+                              </strong>
+                            </span>
+                            {hiddenCases.length > 0 && (
+                              <span className="text-muted-foreground">
+                                Hidden Tests:{" "}
+                                <strong className={hiddenPassed === hiddenCases.length ? "text-green-400" : "text-amber-400"}>
+                                  {hasGrading ? `${hiddenPassed} / ${hiddenCases.length} Passed` : "Evaluated during final submission"}
+                                </strong>
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="space-y-2.5">
+                          {allCases.map((tc, tcIdx) => {
+                            const isPublic = tc.is_public !== false
+                            const casePassed = isAllPassed || (casesPassed > tcIdx)
+                            const actualVal = casePassed
+                              ? tc.expected
+                              : latestSub?.compile_output
+                              ? "[Compilation Error]"
+                              : latestSub?.stderr
+                              ? "[Runtime Error]"
+                              : latestSub?.stdout?.trim() || "Wrong Output"
+
+                            return (
+                              <div
+                                key={tcIdx}
+                                className={`rounded-lg border p-3 text-xs font-mono ${
+                                  casePassed
+                                    ? "border-green-500/30 bg-green-500/5"
+                                    : "border-red-500/30 bg-red-500/5"
+                                }`}
+                              >
+                                <div className="flex items-center justify-between mb-2">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-semibold text-foreground flex items-center gap-1.5">
+                                      {casePassed ? (
+                                        <CheckCircle2 className="h-4 w-4 text-green-400" />
+                                      ) : (
+                                        <XCircle className="h-4 w-4 text-red-400" />
+                                      )}
+                                      Test Case {tcIdx + 1}
+                                    </span>
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground uppercase font-semibold">
+                                      {isPublic ? "Public" : "Hidden"}
+                                    </span>
+                                  </div>
+                                  <span
+                                    className={`font-bold px-2 py-0.5 rounded text-[10px] ${
+                                      casePassed
+                                        ? "bg-green-500/20 text-green-400 border border-green-500/30"
+                                        : "bg-red-500/20 text-red-400 border border-red-500/30"
+                                    }`}
+                                  >
+                                    {casePassed ? "PASSED" : "FAILED"}
+                                  </span>
+                                </div>
+                                <div className="grid sm:grid-cols-3 gap-2">
+                                  <div>
+                                    <span className="text-muted-foreground block text-[11px]">Input:</span>
+                                    <pre className="text-foreground bg-muted/40 p-1.5 rounded mt-0.5 whitespace-pre-wrap">{tc.input}</pre>
+                                  </div>
+                                  <div>
+                                    <span className="text-muted-foreground block text-[11px]">Expected:</span>
+                                    <pre className="text-foreground bg-muted/40 p-1.5 rounded mt-0.5 whitespace-pre-wrap">{String(tc.expected)}</pre>
+                                  </div>
+                                  <div>
+                                    <span className="text-muted-foreground block text-[11px]">Actual:</span>
+                                    <pre className={`p-1.5 rounded mt-0.5 whitespace-pre-wrap ${casePassed ? "text-green-400 bg-green-950/20" : "text-red-400 bg-red-950/20"}`}>{String(actualVal)}</pre>
+                                  </div>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+
+                        <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground bg-muted/20 p-2.5 rounded-lg border border-border">
+                          <span>
+                            Total: <strong>{hasGrading ? `${casesPassed} / ${totalCases} test cases passed` : "Pending evaluation"}</strong>
+                          </span>
+                          <span>
+                            Points Earned: <strong>{answer?.points_earned ?? 0} / {maxPts}</strong>
+                          </span>
+                        </div>
+                      </div>
+                    )
+                  })()
+                )}
               </div>
             )
           })}
