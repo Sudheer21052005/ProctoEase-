@@ -171,27 +171,68 @@ export default function ReviewSection() {
                 <div className="grid md:grid-cols-2 gap-3">
                   <div className="rounded-lg border border-border p-3">
                     <p className="text-xs text-muted-foreground mb-1">Candidate Response</p>
-                    {isCode ? (
-                      codeForQuestion.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">No code submissions.</p>
-                      ) : (
+                    {isCode ? (() => {
+                      const latestSub = codeForQuestion[0]
+                      const answerEntry = answersByQuestion.get(q.id)
+                      // Source code: prefer CodeSubmission.source_code, fallback to answer.text_answer
+                      const sourceCode = latestSub?.source_code || answerEntry?.text_answer || null
+                      const languageName = latestSub?.language_name || (
+                        answerEntry?.language_id ? `Language ${answerEntry.language_id}` : "Unknown"
+                      )
+                      if (!sourceCode) {
+                        return <p className="text-sm text-muted-foreground">No code submitted.</p>
+                      }
+                      return (
                         <div className="space-y-2">
-                          {codeForQuestion.slice(0, 3).map((sub) => (
-                            <div key={sub.id} className="text-xs rounded bg-muted p-2">
-                              <p>
-                                <span className="font-semibold">Status:</span> {sub.status}
-                              </p>
-                              <p>
-                                <span className="font-semibold">Lang:</span> {sub.language_name}
-                              </p>
-                              <p className="truncate">
-                                <span className="font-semibold">Code:</span> {sub.source_code || "—"}
-                              </p>
+                          <div className="flex flex-wrap gap-2 items-center">
+                            {latestSub && (
+                              <span className={`text-xs px-2 py-0.5 rounded font-medium ${
+                                latestSub.status === "accepted"
+                                  ? "bg-green-500/20 text-green-400"
+                                  : latestSub.status === "wrong_answer"
+                                  ? "bg-red-500/20 text-red-400"
+                                  : latestSub.status === "runtime_error"
+                                  ? "bg-orange-500/20 text-orange-400"
+                                  : latestSub.status === "compilation_error"
+                                  ? "bg-red-700/20 text-red-500"
+                                  : "bg-muted text-muted-foreground"
+                              }`}>
+                                {latestSub.status.replace(/_/g, " ").toUpperCase()}
+                              </span>
+                            )}
+                            <span className="text-xs text-muted-foreground">{languageName}</span>
+                            {latestSub?.time_sec != null && (
+                              <span className="text-xs text-muted-foreground">{latestSub.time_sec}s</span>
+                            )}
+                          </div>
+                          {/* Submitted source code */}
+                          <pre className="text-xs rounded bg-muted/50 p-2 overflow-x-auto max-h-48 border border-border whitespace-pre-wrap break-words">
+                            {sourceCode}
+                          </pre>
+                          {/* Compilation error */}
+                          {latestSub?.compile_output && (
+                            <div className="rounded bg-red-500/10 border border-red-500/20 p-2">
+                              <p className="text-xs text-red-400 font-semibold mb-1">Compilation Error:</p>
+                              <pre className="text-xs text-red-300 whitespace-pre-wrap break-words">{latestSub.compile_output}</pre>
                             </div>
-                          ))}
+                          )}
+                          {/* Runtime stderr */}
+                          {latestSub?.stderr && !latestSub?.compile_output && (
+                            <div className="rounded bg-orange-500/10 border border-orange-500/20 p-2">
+                              <p className="text-xs text-orange-400 font-semibold mb-1">Runtime Error:</p>
+                              <pre className="text-xs text-orange-300 whitespace-pre-wrap break-words">{latestSub.stderr}</pre>
+                            </div>
+                          )}
+                          {/* Stdout */}
+                          {latestSub?.stdout && (
+                            <div className="rounded bg-muted/50 border border-border p-2">
+                              <p className="text-xs text-muted-foreground font-semibold mb-1">Output:</p>
+                              <pre className="text-xs text-foreground whitespace-pre-wrap break-words">{latestSub.stdout}</pre>
+                            </div>
+                          )}
                         </div>
                       )
-                    ) : (
+                    })() : (
                       <p className="text-sm">{optionLabel(answer?.selected_option_ids)}</p>
                     )}
                   </div>
@@ -199,9 +240,24 @@ export default function ReviewSection() {
                   <div className="rounded-lg border border-border p-3">
                     <p className="text-xs text-muted-foreground mb-1">Scoring</p>
                     {isCode ? (
-                      <p className="text-sm text-muted-foreground">
-                        Code grading is handled asynchronously via Judge0.
-                      </p>
+                      <div className="text-sm space-y-1">
+                        <p>
+                          Auto Result:{" "}
+                          {answer?.is_correct == null
+                            ? "Pending"
+                            : answer.is_correct
+                            ? "✅ Passed"
+                            : "❌ Failed"}
+                        </p>
+                        <p>
+                          Points Earned: {answer?.points_earned ?? 0} / {maxPts}
+                        </p>
+                        {answer?.is_correct == null && (
+                          <p className="text-xs text-muted-foreground italic">
+                            Graded automatically when the exam is submitted.
+                          </p>
+                        )}
+                      </div>
                     ) : (
                       <div className="text-sm space-y-1">
                         <p>
@@ -226,3 +282,4 @@ export default function ReviewSection() {
     </FeatureGuard>
   )
 }
+

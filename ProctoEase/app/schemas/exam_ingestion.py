@@ -19,6 +19,7 @@ class ExamCreationMode(str, Enum):
 class CodeTestCase(BaseModel):
     input: str = Field(default="", max_length=10_000)
     expected: str = Field(..., min_length=1, max_length=10_000)
+    is_public: bool = Field(default=False)
 
 
 class IngestQuestion(BaseModel):

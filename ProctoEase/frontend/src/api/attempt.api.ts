@@ -14,12 +14,14 @@ export interface AnswerSubmit {
   question_id: string
   selected_option_ids?: string[] | null
   text_answer?: string | null
+  language_id?: number | null
 }
 
 export interface AnswerRead {
   question_id: string
   selected_option_ids?: string[] | null
   text_answer?: string | null
+  language_id?: number | null
   is_correct?: boolean | null
   points_earned?: number | null
 }

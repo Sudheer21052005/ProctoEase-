@@ -66,6 +66,7 @@ export default function ExamScreen() {
       question_id: a.question_id,
       selected_option_ids: a.selected_option_ids || null,
       text_answer: a.text_answer || null,
+      language_id: a.language_id ?? null,
     }))
   }, [getAnswersPayload])
 
@@ -380,8 +381,10 @@ export default function ExamScreen() {
             sidebarOpen ? "translate-x-0" : "-translate-x-full"
           }`}
         >
-          {/* Webcam feed */}
-          <WebcamMonitor enabled />
+          {/* Webcam feed — sticky so it stays visible during scroll */}
+          <div className="sticky top-0 z-10 bg-[#161b27] pb-2 border-b border-white/[0.06] -mx-3 px-3 pt-1">
+            <WebcamMonitor enabled />
+          </div>
 
           {/* Question navigation */}
           <QuestionNav questions={questions} />
@@ -391,57 +394,95 @@ export default function ExamScreen() {
         </aside>
 
         {/* Main question area */}
-        <main className="flex-1 overflow-y-auto p-6 relative">
-          <div className="max-w-2xl mx-auto">
-            <AnimatePresence mode="wait">
-              <motion.div
-                key={currentQuestion.id}
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
-                transition={{ duration: 0.2 }}
-              >
-                <QuestionDisplay question={currentQuestion} />
-
-                {currentQuestion.type === "code" && attemptId && (
-                  <CodeEditor
-                    attemptId={attemptId}
-                    questionId={currentQuestion.id}
-                    initialCode={answers[currentQuestion.id]?.text_answer || ""}
-                    onChange={(code) => setAnswer(currentQuestion.id, { text_answer: code })}
-                    publicTestCases={currentQuestion.public_test_cases || []}
-                  />
-                )}
-              </motion.div>
-            </AnimatePresence>
-
-            {/* Navigation buttons */}
-            <div className="flex items-center justify-between mt-8 pt-4 border-t border-white/[0.07]">
-              <button
-                onClick={() => setCurrentIndex(Math.max(0, currentIndex - 1))}
-                disabled={currentIndex === 0}
-                className="inline-flex items-center gap-2 px-4 py-2 border border-white/[0.08] rounded-xl text-sm font-medium text-slate-300 hover:bg-white/[0.06] hover:text-white transition-all disabled:opacity-30"
-              >
-                <ArrowLeft className="h-4 w-4" />
-                Previous
-              </button>
-
-              <span className="text-xs text-slate-600 font-mono tabular-nums">
-                {currentIndex + 1} / {questions.length}
-              </span>
-
-              <button
-                onClick={() =>
-                  setCurrentIndex(Math.min(questions.length - 1, currentIndex + 1))
-                }
-                disabled={currentIndex >= questions.length - 1}
-                className="inline-flex items-center gap-2 px-4 py-2 bg-[#6366f1] hover:bg-[#4f46e5] text-white text-sm font-semibold rounded-xl transition-all hover:-translate-y-[1px] disabled:opacity-30 disabled:hover:translate-y-0"
-              >
-                Next
-                <ArrowRight className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
+        <main className="flex-1 overflow-hidden flex flex-col relative">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={currentQuestion.id}
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              transition={{ duration: 0.2 }}
+              className="flex-1 flex flex-col min-h-0 h-full"
+            >
+              {currentQuestion.type === "code" && attemptId ? (
+                <div className="flex flex-1 min-h-0 overflow-hidden">
+                  {/* Left: Problem description panel */}
+                  <div className="w-[42%] min-w-0 border-r border-white/[0.07] overflow-y-auto p-6">
+                    <QuestionDisplay question={currentQuestion} />
+                    {/* Navigation buttons inside problem pane */}
+                    <div className="flex items-center justify-between mt-8 pt-4 border-t border-white/[0.07]">
+                      <button
+                        onClick={() => setCurrentIndex(Math.max(0, currentIndex - 1))}
+                        disabled={currentIndex === 0}
+                        className="inline-flex items-center gap-2 px-4 py-2 border border-white/[0.08] rounded-xl text-sm font-medium text-slate-300 hover:bg-white/[0.06] hover:text-white transition-all disabled:opacity-30"
+                      >
+                        <ArrowLeft className="h-4 w-4" />
+                        Previous
+                      </button>
+                      <span className="text-xs text-slate-600 font-mono tabular-nums">
+                        {currentIndex + 1} / {questions.length}
+                      </span>
+                      <button
+                        onClick={() =>
+                          setCurrentIndex(Math.min(questions.length - 1, currentIndex + 1))
+                        }
+                        disabled={currentIndex >= questions.length - 1}
+                        className="inline-flex items-center gap-2 px-4 py-2 bg-[#6366f1] hover:bg-[#4f46e5] text-white text-sm font-semibold rounded-xl transition-all hover:-translate-y-[1px] disabled:opacity-30 disabled:hover:translate-y-0"
+                      >
+                        Next
+                        <ArrowRight className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                  {/* Right: Code Editor */}
+                  <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
+                    <CodeEditor
+                      attemptId={attemptId}
+                      questionId={currentQuestion.id}
+                      initialCode={answers[currentQuestion.id]?.text_answer || ""}
+                      initialLanguageId={answers[currentQuestion.id]?.language_id}
+                      onChange={(code, langId) => setAnswer(currentQuestion.id, { text_answer: code, language_id: langId })}
+                      publicTestCases={currentQuestion.public_test_cases || []}
+                      hiddenCasesCount={
+                        (currentQuestion as unknown as { _hidden_cases_count?: number })
+                          ?._hidden_cases_count ?? 0
+                      }
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="flex-1 overflow-y-auto p-6">
+                  <div className="max-w-2xl mx-auto">
+                    <QuestionDisplay question={currentQuestion} />
+                    {/* Navigation buttons */}
+                    <div className="flex items-center justify-between mt-8 pt-4 border-t border-white/[0.07]">
+                      <button
+                        onClick={() => setCurrentIndex(Math.max(0, currentIndex - 1))}
+                        disabled={currentIndex === 0}
+                        className="inline-flex items-center gap-2 px-4 py-2 border border-white/[0.08] rounded-xl text-sm font-medium text-slate-300 hover:bg-white/[0.06] hover:text-white transition-all disabled:opacity-30"
+                      >
+                        <ArrowLeft className="h-4 w-4" />
+                        Previous
+                      </button>
+                      <span className="text-xs text-slate-600 font-mono tabular-nums">
+                        {currentIndex + 1} / {questions.length}
+                      </span>
+                      <button
+                        onClick={() =>
+                          setCurrentIndex(Math.min(questions.length - 1, currentIndex + 1))
+                        }
+                        disabled={currentIndex >= questions.length - 1}
+                        className="inline-flex items-center gap-2 px-4 py-2 bg-[#6366f1] hover:bg-[#4f46e5] text-white text-sm font-semibold rounded-xl transition-all hover:-translate-y-[1px] disabled:opacity-30 disabled:hover:translate-y-0"
+                      >
+                        Next
+                        <ArrowRight className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </motion.div>
+          </AnimatePresence>
         </main>
       </div>
 

@@ -11,7 +11,8 @@ class AnswerSubmit(BaseModel):
     """A single answer for a question."""
     question_id: uuid.UUID
     selected_option_ids: list[str] | None = None  # MCQ / multi_select / true_false
-    text_answer: str | None = None                 # reserved; not used by any current question type
+    text_answer: str | None = None                 # code questions: the source code
+    language_id: int | None = None                 # code questions: Judge0 language ID
 
 
 class BulkAnswerSubmit(BaseModel):
@@ -24,6 +25,7 @@ class AnswerRead(BaseModel):
     question_id: uuid.UUID
     selected_option_ids: list[str] | None = None
     text_answer: str | None = None
+    language_id: int | None = None
     is_correct: bool | None = None   # populated after auto-grade
     points_earned: int | None = None
 

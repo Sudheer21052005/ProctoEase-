@@ -6,7 +6,12 @@ Auto-grading logic:
 - MCQ: compare selected_option_ids[0] with question.correct_answer
 - multi_select: compare sorted sets
 - true_false: compare selected_option_ids[0] with correct_answer
-- code: graded asynchronously by Judge0 (not handled here)
+- code: graded synchronously via Judge0 during submit_attempt
+
+Grading contract:
+  ExamAttempt.answers[qid]["text_answer"] is the authoritative final source code.
+  CodeSubmission records are created/updated to persist diagnostics.
+  Judge0 status codes are mapped accurately (never masking runtime errors as wrong_answer).
 """
 
 from __future__ import annotations
@@ -51,16 +56,29 @@ async def save_answers(
         await db.flush()
         raise BadRequest("Attempt duration expired")
 
-    # Merge with existing answers
+    # Merge with existing answers (preserve existing grading fields on upsert)
     existing: dict[str, Any] = attempt.answers or {}
     for ans in answers:
-        existing[str(ans.question_id)] = {
-            "question_id": str(ans.question_id),
+        qid = str(ans.question_id)
+        current = existing.get(qid, {})
+        update: dict[str, Any] = {
+            "question_id": qid,
             "selected_option_ids": ans.selected_option_ids,
             "text_answer": ans.text_answer,
         }
+        # Persist language_id for coding questions if provided
+        if ans.language_id is not None:
+            update["language_id"] = ans.language_id
+        elif current.get("language_id") is not None:
+            update["language_id"] = current["language_id"]
+        # Preserve grading fields from a prior auto-grade run
+        for field in ("is_correct", "points_earned"):
+            if current.get(field) is not None:
+                update[field] = current[field]
+        existing[qid] = update
 
     attempt.answers = existing
+    flag_modified(attempt, "answers")
     await db.flush()
 
     return {"saved": len(answers), "total": len(existing)}
@@ -227,6 +245,23 @@ async def auto_grade(
 # ── Internal helpers ────────────────────────────────────────────
 
 
+def _normalize_output(text: str | None) -> str:
+    """
+    Normalize code execution output for robust comparison.
+
+    - Converts CRLF (\r\n) and bare CR (\r) to LF (\n).
+    - Strips trailing whitespace from every line.
+    - Strips outer leading/trailing whitespace from the result.
+
+    This ensures outputs like "30\r\n" and "30\n" and "30  " all compare equal.
+    """
+    if not text:
+        return ""
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    lines = [line.rstrip() for line in normalized.split("\n")]
+    return "\n".join(lines).strip()
+
+
 async def _canonicalize_stdout_to_bool(stdout: str) -> bool | None:
     """Convert trimmed, lowercased stdout to bool if it looks like a boolean."""
     val = stdout.strip().lower()
@@ -245,15 +280,34 @@ async def grade_code_question(
 ) -> tuple[bool | None, int]:
     """
     Grade a single code question for an attempt using seeded test_cases.
-    Returns (is_correct, points_earned). Updates CodeSubmission status and attempt.answers.
+
+    Authoritative code source priority:
+      1. ExamAttempt.answers[qid]["text_answer"]  (the final submitted code)
+      2. latest CodeSubmission.source_code         (fallback for backwards compat)
+      3. Neither present -> return (None, 0)
+
+    Judge0 status mapping (no exceptions become "wrong_answer"):
+      id 3  -> accepted execution (compare stdout with expected)
+      id 5  -> time_limit_exceeded (stop, record failure)
+      id 6  -> compilation_error   (stop, preserve compile_output)
+      id>=7 -> runtime_error        (stop, preserve stderr)
+      stdout differs -> wrong_answer
+
+    Returns (is_correct, points_earned). Updates CodeSubmission and attempt.answers.
     """
     correct_answer = question.correct_answer or {}
     test_cases = correct_answer.get("test_cases") or []
     if not test_cases:
-        # No test cases defined
         return None, 0
 
-    # Fetch latest code submission for this attempt+question (tenant-scoped)
+    # ── 1. Resolve authoritative source code ─────────────────────
+    raw_answers: dict[str, Any] = attempt.answers or {}
+    ans_key = str(question.id)
+    ans_entry: dict[str, Any] = raw_answers.get(ans_key) or {}
+
+    source_code: str | None = ans_entry.get("text_answer") or None
+
+    # Fetch latest CodeSubmission (needed for persistence record)
     subs_result = await db.execute(
         select(CodeSubmission)
         .where(
@@ -264,67 +318,170 @@ async def grade_code_question(
         .order_by(CodeSubmission.created_at.desc())
     )
     latest_sub = subs_result.scalars().first()
-    if not latest_sub:
+
+    # Fallback: if answers has no code, try old code submission record
+    if not source_code and latest_sub:
+        source_code = latest_sub.source_code or None
+
+    if not source_code:
+        # Nothing to grade
         return None, 0
 
-    source_code = latest_sub.source_code
-    language_id = latest_sub.language_id
+    # ── 2. Resolve language_id ────────────────────────────────────
+    language_id: int = (
+        ans_entry.get("language_id")
+        or (latest_sub.language_id if latest_sub else None)
+        or 71  # default Python 3.8.1
+    )
 
-    passed = 0
+    # ── 3. Guarantee a CodeSubmission record exists ───────────────
+    if latest_sub is None:
+        # Create a fresh submission record to hold final diagnostics
+        from app.services.code_execution_service import _get_language_name
+        try:
+            language_name = await _get_language_name(language_id)
+        except Exception:
+            language_name = f"language_{language_id}"
+        latest_sub = CodeSubmission(
+            attempt_id=attempt.id,
+            question_id=question.id,
+            tenant_id=tenant_id,
+            language_id=language_id,
+            language_name=language_name,
+            source_code=source_code,
+            status=SubmissionStatus.QUEUED.value,
+        )
+        db.add(latest_sub)
+        await db.flush()  # assign PK
+    else:
+        # Always update source_code to the authoritative final version
+        latest_sub.source_code = source_code
+        latest_sub.language_id = language_id
+
+    # ── 4. Execute each test case ─────────────────────────────────
     total_cases = len(test_cases)
+    passed = 0
 
-    # Execute each test case, collect results in memory
+    # Track aggregate diagnostics from the run
+    overall_status = SubmissionStatus.ACCEPTED.value  # optimistic
+    last_stdout: str | None = None
+    last_stderr: str | None = None
+    last_compile_output: str | None = None
+    last_time: float | None = None
+    last_memory: int | None = None
+    last_exit: int | None = None
+
     for tc in test_cases:
         stdin = tc.get("input", "")
         expected = tc.get("expected")
+
         resp = await code_execution_service._execute_single_test_case(
             source_code, language_id, stdin
         )
-        stdout = resp.get("stdout") or ""
-        # Truncate stdout at 10KB
-        if len(stdout) > 10_000:
-            stdout = stdout[:10_000]
 
-        # Compare
-        if isinstance(expected, bool):
-            got = await _canonicalize_stdout_to_bool(stdout)
-            case_passed = got == expected
-        else:
-            case_passed = stdout.strip().lower() == str(expected).strip().lower()
+        status_id: int = resp.get("status", {}).get("id", 0)
+        stdout_raw: str | None = resp.get("stdout")
+        stderr_raw: str | None = resp.get("stderr")
+        compile_raw: str | None = resp.get("compile_output")
 
-        if case_passed:
-            passed += 1
+        # Capture execution metrics from the last test case run
+        last_stdout = stdout_raw
+        last_stderr = stderr_raw
+        last_compile_output = compile_raw
+        last_time = _safe_float(resp.get("time"))
+        last_memory = _safe_int(resp.get("memory"))
+        last_exit = resp.get("exit_code")
 
-    # Proportional scoring
+        if status_id == 6:
+            # Compilation Error — stop immediately, no partial credit
+            overall_status = SubmissionStatus.COMPILATION_ERROR.value
+            break
+
+        if status_id == 5:
+            # Time Limit Exceeded
+            overall_status = SubmissionStatus.TIME_LIMIT_EXCEEDED.value
+            break
+
+        if status_id >= 7 or (status_id not in (0, 1, 2, 3)):
+            # Runtime Error (NZEC, SIGFPE, etc.)
+            overall_status = SubmissionStatus.RUNTIME_ERROR.value
+            break
+
+        if status_id == 3:
+            # Execution accepted — compare output
+            stdout_trunc = (stdout_raw or "")
+            if len(stdout_trunc) > 10_000:
+                stdout_trunc = stdout_trunc[:10_000]
+
+            if isinstance(expected, bool):
+                got = await _canonicalize_stdout_to_bool(stdout_trunc)
+                case_passed = (got == expected)
+            else:
+                case_passed = (
+                    _normalize_output(stdout_trunc)
+                    == _normalize_output(str(expected))
+                )
+
+            if case_passed:
+                passed += 1
+            else:
+                # Mark as wrong_answer unless a more critical status already set
+                if overall_status == SubmissionStatus.ACCEPTED.value:
+                    overall_status = SubmissionStatus.WRONG_ANSWER.value
+        # status 0/1/2 are non-terminal; treat as runtime error
+        elif status_id in (0, 1, 2):
+            overall_status = SubmissionStatus.RUNTIME_ERROR.value
+            break
+
+    # ── 5. Compute final score and status ────────────────────────
     points_earned = round(question.points * passed / total_cases) if total_cases else 0
-    is_correct = passed == total_cases and total_cases > 0
+    is_correct = (passed == total_cases) and total_cases > 0
 
-    # Persist aggregated status on latest submission
-    latest_sub.status = (
-        SubmissionStatus.ACCEPTED.value if is_correct else SubmissionStatus.WRONG_ANSWER.value
-    )
-    # Note: we do not store per-case results (migration-free)
+    if is_correct:
+        overall_status = SubmissionStatus.ACCEPTED.value
 
-    # Update attempt answers JSON
-    raw = attempt.answers or {}
-    ans_key = str(question.id)
-    if ans_key in raw:
-        raw[ans_key]["is_correct"] = is_correct
-        raw[ans_key]["points_earned"] = points_earned
-    else:
-        raw[ans_key] = {
-            "question_id": ans_key,
-            "selected_option_ids": None,
-            "text_answer": latest_sub.source_code,
-            "is_correct": is_correct,
-            "points_earned": points_earned,
-        }
-    attempt.answers = raw
-    from sqlalchemy.orm.attributes import flag_modified
+    # ── 6. Persist diagnostics on the CodeSubmission record ───────
+    latest_sub.source_code = source_code
+    latest_sub.status = overall_status
+    latest_sub.stdout = last_stdout
+    latest_sub.stderr = last_stderr
+    latest_sub.compile_output = last_compile_output
+    latest_sub.time_sec = last_time
+    latest_sub.memory_kb = last_memory
+    latest_sub.exit_code = last_exit
+
+    # ── 7. Update attempt answers JSON ───────────────────────────
+    raw_answers[ans_key] = {
+        **ans_entry,
+        "question_id": ans_key,
+        "text_answer": source_code,
+        "language_id": language_id,
+        "is_correct": is_correct,
+        "points_earned": points_earned,
+    }
+    attempt.answers = raw_answers
     flag_modified(attempt, "answers")
 
     await db.flush()
     return is_correct, points_earned
+
+
+def _safe_float(val: Any) -> float | None:
+    if val is None:
+        return None
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return None
+
+
+def _safe_int(val: Any) -> int | None:
+    if val is None:
+        return None
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return None
 
 
 async def _get_own_attempt(

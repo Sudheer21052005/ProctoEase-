@@ -790,24 +790,53 @@ async def generate_integrity_report_pdf(
 
     # ---- Code Submission Details (per question) ----
     # Note: individual per-test-case assertions are not stored in DB (migration-free design).
-    # We display the authoritative execution status and runtime metrics for each code question.
+    # We display source code, authoritative execution status, runtime metrics, and diagnostics.
     pdf.section_title("Code Submission Details")
     for q in questions:
         if q.question_type == "code":
             latest_sub = next((s for s in code_submissions if s.question_id == q.id), None)
-            if latest_sub:
-                pdf.ensure_space(6 * 4)
+            # Source code fallback: use attempt answers if no code submission exists
+            source_code: str | None = None
+            if latest_sub and latest_sub.source_code:
+                source_code = latest_sub.source_code
+            else:
+                ans = raw_answers.get(str(q.id))
+                if ans:
+                    source_code = ans.get("text_answer")
+
+            if latest_sub or source_code:
+                pdf.ensure_space(6 * 5)
                 pdf.set_font(pdf.default_font, "B", 10)
-                pdf.multi_cell(pdf.epw, 6, pdf.clean_text(f"{q.question_text} ({latest_sub.language_name})"), new_x="LMARGIN", new_y="NEXT")
+                lang_name = latest_sub.language_name if latest_sub else "Unknown"
+                pdf.multi_cell(pdf.epw, 6, pdf.clean_text(f"{q.question_text} ({lang_name})"), new_x="LMARGIN", new_y="NEXT")
                 pdf.set_font(pdf.default_font, "", 10)
-                pdf.cell(0, 6, pdf.clean_text(f"  Status: {latest_sub.status.replace('_', ' ').title()}"), new_x="LMARGIN", new_y="NEXT")
-                if latest_sub.stdout:
-                    pdf.trace_block("  Stdout:", latest_sub.stdout)
-                if latest_sub.stderr:
-                    pdf.trace_block("  Stderr:", latest_sub.stderr)
-                if latest_sub.compile_output:
-                    pdf.trace_block("  Compile output:", latest_sub.compile_output)
-                pdf.cell(0, 6, pdf.clean_text(f"  Time: {latest_sub.time_sec:.3f}s  Memory: {latest_sub.memory_kb} KB"), new_x="LMARGIN", new_y="NEXT")
+
+                # Submission status
+                if latest_sub:
+                    status_str = latest_sub.status.replace("_", " ").title() if latest_sub.status else "Unknown"
+                    pdf.cell(0, 6, pdf.clean_text(f"  Status: {status_str}"), new_x="LMARGIN", new_y="NEXT")
+
+                # Submitted source code (always render if available)
+                if source_code:
+                    pdf.trace_block("  Submitted Source Code:", source_code)
+
+                # Runtime stderr (for runtime errors)
+                if latest_sub and latest_sub.stderr:
+                    pdf.trace_block("  Runtime Error / Stderr:", latest_sub.stderr)
+
+                # Compilation output (for compilation errors)
+                if latest_sub and latest_sub.compile_output:
+                    pdf.trace_block("  Compilation Output:", latest_sub.compile_output)
+
+                # Stdout (if present and useful)
+                if latest_sub and latest_sub.stdout:
+                    pdf.trace_block("  Execution Stdout:", latest_sub.stdout)
+
+                # Execution metrics (safe-guard None values)
+                if latest_sub:
+                    time_str = f"{latest_sub.time_sec:.3f}s" if latest_sub.time_sec is not None else "N/A"
+                    memory_str = f"{latest_sub.memory_kb} KB" if latest_sub.memory_kb is not None else "N/A"
+                    pdf.cell(0, 6, pdf.clean_text(f"  Time: {time_str}  Memory: {memory_str}"), new_x="LMARGIN", new_y="NEXT")
                 pdf.ln(2)
             else:
                 pdf.set_font(pdf.default_font, "I", 10)

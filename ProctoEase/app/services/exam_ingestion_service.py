@@ -127,6 +127,11 @@ def _normalize_correct_answer(question) -> Any:
     if question.type == "code":
         test_cases = [tc.model_dump() for tc in (question.test_cases or [])]
         if test_cases:
+            # If no test case is explicitly public, mark the first one public
+            # so candidates always have at least one sample to run.
+            has_public = any(tc.get("is_public") for tc in test_cases)
+            if not has_public:
+                test_cases[0]["is_public"] = True
             return {"test_cases": test_cases}
         return None
 

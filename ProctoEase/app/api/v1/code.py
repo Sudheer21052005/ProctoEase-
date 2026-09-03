@@ -21,7 +21,7 @@ from app.schemas.code_submission import (
     CodeRunRequest, CodeRunResponse, CodeRunCaseResult,
 )
 from app.services import code_execution_service
-from app.services.answer_service import _canonicalize_stdout_to_bool
+from app.services.answer_service import _canonicalize_stdout_to_bool, _normalize_output
 
 router = APIRouter(tags=["Code Execution"])
 
@@ -163,19 +163,51 @@ async def run_code_public(
         if len(stdout) > 10_000:
             stdout = stdout[:10_000]
         status_id = judge0_resp.get("status", {}).get("id", 0)
-        # Determine pass using same comparator as grading
-        if isinstance(expected, bool):
+        stderr = judge0_resp.get("stderr") or ""
+        compile_output = judge0_resp.get("compile_output") or ""
+
+        # Map status_id to a human-readable string for display
+        status_label_map = {
+            3: "accepted",
+            5: "time_limit_exceeded",
+            6: "compilation_error",
+        }
+        if status_id == 3:
+            status_label = "accepted"
+        elif status_id == 5:
+            status_label = "time_limit_exceeded"
+        elif status_id == 6:
+            status_label = "compilation_error"
+        elif status_id >= 7:
+            status_label = "runtime_error"
+        else:
+            status_label = str(status_id)
+
+        # Determine pass using normalized comparison (same as grading)
+        if status_id != 3:
+            # Execution itself failed — not a pass
+            passed = False
+        elif isinstance(expected, bool):
             got = await _canonicalize_stdout_to_bool(stdout)
             passed = got == expected
         else:
-            passed = stdout.strip().lower() == str(expected).strip().lower()
+            passed = _normalize_output(stdout) == _normalize_output(str(expected))
+
+        # Combine diagnostics for display
+        actual_display = stdout
+        if compile_output:
+            actual_display = f"[Compilation Error]\n{compile_output}"
+        elif stderr:
+            actual_display = f"[Runtime Error]\n{stderr}"
+        elif not stdout and status_id != 3:
+            actual_display = f"[{status_label.replace('_', ' ').title()}]"
 
         results.append(CodeRunCaseResult(
             input=stdin,
             expected=expected,
-            actual=stdout,
+            actual=actual_display,
             passed=passed,
-            status=str(status_id),
+            status=status_label,
         ))
 
     return CodeRunResponse(cases=results)

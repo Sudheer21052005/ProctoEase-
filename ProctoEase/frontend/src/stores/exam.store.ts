@@ -16,6 +16,7 @@ export interface Answer {
   question_id: string
   selected_option_ids?: string[]
   text_answer?: string
+  language_id?: number
   is_marked_for_review: boolean
 }
 
